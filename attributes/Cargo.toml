@@ -1,0 +1,9 @@
+[package]
+name = "taurus-attributes"
+version = "0.0.1"
+authors = ["Pei Wang <wangpei10@baidu.com>"]
+edition = "2018"
+
+[lib]
+test = false
+doctest = false

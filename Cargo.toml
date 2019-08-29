@@ -1,0 +1,9 @@
+[workspace]
+members = [
+    "attributes",
+    "annotation",
+    "auditor",
+]
+
+[profile.release]
+debug = true

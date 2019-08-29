@@ -1,0 +1,27 @@
+[package]
+name = "taurus"
+version = "0.0.1"
+authors = ["Pei Wang <wangpei10@baidu.com>"]
+edition = "2018"
+
+[lib]
+test = false
+doctest = false
+
+[[bin]]
+name = "taurus"
+path = "src/main.rs"
+
+[dependencies]
+log = "*"
+sled = "*"
+env_logger = "*"
+fs2 = "*"
+serde = "*"
+serde_derive = "*"
+bincode = "*"
+
+taurus-attributes = { path = "../attributes" }
+taurus-annotation = { path = "../annotation" }
+
+
