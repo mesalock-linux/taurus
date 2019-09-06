@@ -7,7 +7,6 @@ extern crate rustc_errors;
 extern crate rustc_interface;
 extern crate rustc_metadata;
 extern crate rustc_mir;
-extern crate rustc_apfloat;
 extern crate rustc_target;
 extern crate syntax;
 extern crate syntax_pos;
@@ -20,7 +19,7 @@ extern crate sled;
 
 extern crate taurus_attributes;
 
-pub mod extractor;
 pub mod analyzer;
 pub(crate) mod annotated;
+pub mod extractor;
 pub(crate) mod summaries;

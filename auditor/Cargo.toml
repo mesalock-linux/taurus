@@ -20,6 +20,8 @@ fs2 = "*"
 serde = "*"
 serde_derive = "*"
 bincode = "*"
+petgraph = "*"
+seahash = "*"
 
 taurus-attributes = { path = "../attributes" }
 taurus-annotation = { path = "../annotation" }

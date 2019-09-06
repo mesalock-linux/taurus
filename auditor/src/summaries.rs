@@ -1,26 +1,28 @@
 use rustc::hir::def_id::{DefId, LOCAL_CRATE};
 use rustc::hir::map::DefPathData;
-use rustc::ty::TyCtxt;
 use rustc::ty::print::with_crate_prefix;
+use rustc::ty::TyCtxt;
 use syntax::source_map::SourceMap;
 use syntax_pos::Loc;
 
 use sled::{ConfigBuilder, Db};
 
-use std::path::Path;
-use std::io::{Error, ErrorKind};
 use std::collections::HashMap;
+use std::io::{Error, ErrorKind};
+use std::path::Path;
 use std::rc::Rc;
 
 extern crate fs2;
 extern crate serde;
 
-use serde::Serialize;
 use serde::de::DeserializeOwned;
+use serde::Serialize;
+
+pub const FNPTR_DEF_NAME_CANONICAL: &'static str = "@fnptr";
 
 pub struct Canonical<'a, 'gcx: 'tcx, 'tcx: 'a, 'rtcx>
 where
-    'tcx: 'rtcx
+    'tcx: 'rtcx,
 {
     tcx: &'rtcx TyCtxt<'a, 'gcx, 'tcx>,
     crate_name: String,
@@ -29,11 +31,12 @@ where
 
 impl<'a, 'gcx, 'tcx, 'rtcx> Canonical<'a, 'gcx, 'tcx, 'rtcx> {
     pub fn new(tcx: &'rtcx TyCtxt<'a, 'gcx, 'tcx>, source_map: Rc<SourceMap>) -> Self {
-        let crate_name = tcx.crate_name(LOCAL_CRATE)
+        let crate_name = tcx
+            .crate_name(LOCAL_CRATE)
             .as_interned_str()
             .as_str()
             .to_string();
-        
+
         Self {
             tcx,
             crate_name,
@@ -48,18 +51,20 @@ impl<'a, 'gcx, 'tcx, 'rtcx> Canonical<'a, 'gcx, 'tcx, 'rtcx> {
     pub fn source_map(&self) -> &Rc<SourceMap> {
         &self.source_map
     }
-    
+
     pub fn monoitem_name<T: std::fmt::Display>(&self, inst: &T) -> String {
         const CRATE_PREFIX: &'static str = "crate::";
         const VALID_RUST_IDENT_CHAR: &'static str =
             "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_";
 
         let plain = with_crate_prefix(|| format!("{}", inst));
-        let mut replace_points =
-            plain.match_indices(CRATE_PREFIX).filter(|(idx, _)| {
-                let i = *idx;
-                i == 0usize || VALID_RUST_IDENT_CHAR.find(plain.get(i-1..i).unwrap()).is_none()
-            });
+        let mut replace_points = plain.match_indices(CRATE_PREFIX).filter(|(idx, _)| {
+            let i = *idx;
+            i == 0usize
+                || VALID_RUST_IDENT_CHAR
+                    .find(plain.get(i - 1..i).unwrap())
+                    .is_none()
+        });
 
         match replace_points.next() {
             None => plain,
@@ -85,7 +90,9 @@ impl<'a, 'gcx, 'tcx, 'rtcx> Canonical<'a, 'gcx, 'tcx, 'rtcx> {
     }
 
     pub fn def_name(&self, def_id: DefId) -> String {
-        let mut name = self.tcx.crate_name(def_id.krate)
+        let mut name = self
+            .tcx
+            .crate_name(def_id.krate)
             .as_interned_str()
             .as_str()
             .to_string();
@@ -93,11 +100,7 @@ impl<'a, 'gcx, 'tcx, 'rtcx> Canonical<'a, 'gcx, 'tcx, 'rtcx> {
             name.push_str("::");
             use DefPathData::*;
             match &component.data {
-                TypeNs(n)
-                | ValueNs(n)
-                | LifetimeNs(n)
-                | MacroNs(n)
-                | GlobalMetaData(n) => {
+                TypeNs(n) | ValueNs(n) | LifetimeNs(n) | MacroNs(n) | GlobalMetaData(n) => {
                     name.push_str(&n.as_str());
                 }
                 _ => name.push_str(match &component.data {
@@ -129,6 +132,7 @@ pub struct SourceLocation {
 pub struct CallEdge {
     pub callee_name: String,
     pub callee_def: String,
+    pub is_lang_item: bool,
     pub type_params: Vec<String>,
     pub src_loc: SourceLocation,
 }
@@ -152,7 +156,7 @@ where
 
 impl<V> PersistentSummaryStore<V>
 where
-    V: Serialize + DeserializeOwned
+    V: Serialize + DeserializeOwned,
 {
     pub fn new(persist_db_path: &Path) -> std::io::Result<Self> {
         if !persist_db_path.exists() {
@@ -160,44 +164,24 @@ where
                 .map_err(|_| Error::new(ErrorKind::NotFound, "invalid db directory"))?;
         }
 
-        let mut lock_file_options = std::fs::OpenOptions::new();
-        lock_file_options.create(true).write(true);
-
-        let db_config = lock_file_options.open(&persist_db_path.join("db.lock"))
-            .and_then(|file| {
-                use fs2::FileExt;
-                file.lock_exclusive()?;
-                let config = ConfigBuilder::new()
-                    .path(persist_db_path.clone())
-                    .build();
-                file.unlock()?;
-                Ok(config)
-            })?;
-
-        // initialize the in-mem store at start up
-        let persist_store = Db::start(db_config).unwrap();
-        let mut inmem_store: HashMap<String, V> = HashMap::new();
-        for read_result in persist_store.iter() {
-            let db_corrupted = "db corrupted";
-            let (key_bin, val_bin) = read_result.expect(db_corrupted);
-            let key = std::str::from_utf8(&key_bin).expect(db_corrupted);
-            let val = bincode::deserialize(&val_bin).expect(db_corrupted);
-            inmem_store.insert(key.to_string(), val);
-        }
+        // Need a strategy here to avoid sled racing. For now, just make sure
+        // cargo is invoked with `-j 1` 
+        let config = ConfigBuilder::new().path(persist_db_path.clone()).build();
+        let persist_store = Db::start(config).unwrap();
 
         Ok(Self {
             persist_store,
-            inmem_store,
+            inmem_store: HashMap::new(),
         })
     }
 
     pub fn insert(&mut self, k: String, v: V) -> Option<V> {
-        let persist_val = bincode::serialize(&v).ok()?;
-        self.persist_store.insert(k.as_bytes(), persist_val).ok()?;
+        let persist_val = bincode::serialize(&v).unwrap();
+        self.persist_store.insert(k.as_bytes(), persist_val).unwrap();
         self.inmem_store.insert(k, v)
     }
 
-    pub fn get(&mut self, k: &String) -> Option<&V> {
+    pub fn get_cached(&mut self, k: &String) -> Option<&V> {
         if !self.inmem_store.contains_key(k) {
             if let Ok(Some(ser_val)) = self.persist_store.get(k.as_bytes()) {
                 let val = bincode::deserialize(&*ser_val).ok()?;
@@ -207,5 +191,24 @@ where
             }
         }
         self.inmem_store.get(k)
+    }
+
+    pub fn get(&self, k: &String) -> Option<V> {
+        if let Ok(Some(ser_val)) = self.persist_store.get(k.as_bytes()) {
+            let val = bincode::deserialize(&*ser_val).ok()?;
+            Some(val)
+        } else {
+            None
+        }
+    }
+
+    pub fn iter<'a>(&'a self) -> impl std::iter::Iterator<Item = (String, V)> + 'a {
+        self.persist_store.iter().map(|result| {
+            let (key, value) = result.unwrap();
+            (
+                String::from_utf8(key.to_vec()).unwrap(),
+                bincode::deserialize::<V>(&value).unwrap(),
+            )
+        })
     }
 }

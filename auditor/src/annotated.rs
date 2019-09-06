@@ -1,6 +1,6 @@
 use rustc::hir::*;
-use rustc::ty::TyCtxt;
 use rustc::ty::fast_reject;
+use rustc::ty::TyCtxt;
 
 use std::collections::HashSet;
 
@@ -9,7 +9,7 @@ pub fn extract_functions_to_audit(tcx: &TyCtxt<'_, '_, '_>) -> HashSet<HirId> {
     let hir_map = tcx.hir();
     let symbols = taurus_attributes::Symbols::new();
     let mark = &symbols.require_audit;
-    
+
     for (_, item) in &hir_map.krate().trait_items {
         if syntax::attr::contains_name(&item.attrs, *mark) {
             if let TraitItemKind::Method(..) = item.node {
@@ -38,15 +38,10 @@ pub fn extract_functions_to_audit(tcx: &TyCtxt<'_, '_, '_>) -> HashSet<HirId> {
                 ItemKind::Fn(_, _, _, body_id) => {
                     funcs.insert(body_id.hir_id);
                 }
-                ItemKind::Enum(..)
-                | ItemKind::Struct(..)
-                | ItemKind::Union(..) =>
-                {
+                ItemKind::Enum(..) | ItemKind::Struct(..) | ItemKind::Union(..) => {
                     let def_id = hir_map.local_def_id_from_hir_id(item.hir_id);
                     let ty = tcx.type_of(def_id);
-                    if let Some(simplified_self_ty) =
-                        fast_reject::simplify_type(*tcx, ty, false)
-                    {
+                    if let Some(simplified_self_ty) = fast_reject::simplify_type(*tcx, ty, false) {
                         marked_adts.insert(simplified_self_ty);
                     } else {
                         panic!("marked ADT cannot be simplified");
@@ -58,7 +53,7 @@ pub fn extract_functions_to_audit(tcx: &TyCtxt<'_, '_, '_>) -> HashSet<HirId> {
                 // traits directly.
                 ItemKind::Trait(_, _, _, _, trait_items) => {
                     for trait_item in trait_items {
-                        if let AssociatedItemKind::Method {..} = trait_item.kind {
+                        if let AssociatedItemKind::Method { .. } = trait_item.kind {
                             if trait_item.defaultness.has_value() {
                                 funcs.insert(trait_item.id.hir_id);
                             }
@@ -67,7 +62,7 @@ pub fn extract_functions_to_audit(tcx: &TyCtxt<'_, '_, '_>) -> HashSet<HirId> {
                 }
                 ItemKind::Impl(_, ImplPolarity::Positive, _, _, _, _, impl_items) => {
                     for impl_item in impl_items {
-                        if let AssociatedItemKind::Method {..} = impl_item.kind {
+                        if let AssociatedItemKind::Method { .. } = impl_item.kind {
                             funcs.insert(impl_item.id.hir_id);
                         }
                     }
@@ -90,7 +85,7 @@ pub fn extract_functions_to_audit(tcx: &TyCtxt<'_, '_, '_>) -> HashSet<HirId> {
                     {
                         if marked_adts.contains(&simplified_self_ty) {
                             for impl_item in impl_items {
-                                if let AssociatedItemKind::Method {..} = impl_item.kind {
+                                if let AssociatedItemKind::Method { .. } = impl_item.kind {
                                     funcs.insert(impl_item.id.hir_id);
                                 }
                             }
@@ -101,6 +96,5 @@ pub fn extract_functions_to_audit(tcx: &TyCtxt<'_, '_, '_>) -> HashSet<HirId> {
         }
     }
 
-    return funcs
+    return funcs;
 }
-
