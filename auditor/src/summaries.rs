@@ -5,10 +5,10 @@ use rustc::ty::TyCtxt;
 use syntax::source_map::SourceMap;
 use syntax_pos::Loc;
 
-use sled::{ConfigBuilder, Db};
+use rusqlite::types::ToSql;
+use rusqlite::{Connection, NO_PARAMS};
 
 use std::collections::HashMap;
-use std::io::{Error, ErrorKind};
 use std::path::Path;
 use std::rc::Rc;
 
@@ -150,7 +150,7 @@ pub struct PersistentSummaryStore<V>
 where
     V: Serialize + DeserializeOwned,
 {
-    persist_store: Db,
+    persist_store: Connection,
     inmem_store: HashMap<String, V>,
 }
 
@@ -158,16 +158,21 @@ impl<V> PersistentSummaryStore<V>
 where
     V: Serialize + DeserializeOwned,
 {
-    pub fn new(persist_db_path: &Path) -> std::io::Result<Self> {
+    pub fn new(persist_db_path: &Path) -> rusqlite::Result<Self> {
         if !persist_db_path.exists() {
             std::fs::create_dir_all(persist_db_path)
-                .map_err(|_| Error::new(ErrorKind::NotFound, "invalid db directory"))?;
+                .map_err(|_| rusqlite::Error::InvalidPath(persist_db_path.to_owned()))?;
         }
 
-        // Need a strategy here to avoid sled racing. For now, just make sure
-        // cargo is invoked with `-j 1` 
-        let config = ConfigBuilder::new().path(persist_db_path.clone()).build();
-        let persist_store = Db::start(config).unwrap();
+        let persist_store = Connection::open(&persist_db_path.join("db"))?;
+
+        persist_store.execute(
+            "CREATE TABLE IF NOT EXISTS data (
+                  key              TEXT NOT NULL PRIMARY KEY,
+                  value            BLOB NOT NULL
+             ) WITHOUT ROWID",
+            NO_PARAMS,
+        )?;
 
         Ok(Self {
             persist_store,
@@ -177,38 +182,22 @@ where
 
     pub fn insert(&mut self, k: String, v: V) -> Option<V> {
         let persist_val = bincode::serialize(&v).unwrap();
-        self.persist_store.insert(k.as_bytes(), persist_val).unwrap();
+        self.persist_store.execute(
+            "INSERT OR REPLACE INTO data(key, value) values(?1, ?2)",
+            &[&k as &ToSql, &persist_val],
+        ).unwrap();
         self.inmem_store.insert(k, v)
     }
 
-    pub fn get_cached(&mut self, k: &String) -> Option<&V> {
-        if !self.inmem_store.contains_key(k) {
-            if let Ok(Some(ser_val)) = self.persist_store.get(k.as_bytes()) {
-                let val = bincode::deserialize(&*ser_val).ok()?;
-                self.inmem_store.insert(k.clone(), val)?;
-            } else {
-                return None;
-            }
-        }
-        self.inmem_store.get(k)
-    }
-
-    pub fn get(&self, k: &String) -> Option<V> {
-        if let Ok(Some(ser_val)) = self.persist_store.get(k.as_bytes()) {
-            let val = bincode::deserialize(&*ser_val).ok()?;
-            Some(val)
-        } else {
-            None
-        }
-    }
-
-    pub fn iter<'a>(&'a self) -> impl std::iter::Iterator<Item = (String, V)> + 'a {
-        self.persist_store.iter().map(|result| {
-            let (key, value) = result.unwrap();
-            (
-                String::from_utf8(key.to_vec()).unwrap(),
-                bincode::deserialize::<V>(&value).unwrap(),
-            )
-        })
+    pub fn for_each<F: FnMut((String, V)) -> ()>(&self, mut f: F) {
+        let mut stmt = self.persist_store.prepare("SELECT * FROM data").unwrap();
+        let iter = stmt.query_map(NO_PARAMS, |row| {
+            let val: Vec<u8> = row.get(1).unwrap();
+            Ok((
+                row.get(0).unwrap(),
+                bincode::deserialize(&val).unwrap(),
+            ))
+        }).unwrap();
+        iter.for_each(|r| f(r.unwrap()))
     }
 }

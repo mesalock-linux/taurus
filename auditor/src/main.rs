@@ -59,7 +59,7 @@ fn main() {
         std::process::exit(result.is_err() as i32);
     } else {
         // We are in analysis mode
-        let db_path = Path::new("target/debug/deps/taurus.sled");
+        let db_path = Path::new("target/debug/deps/taurus.depstore");
         let analyzer = analyzer::TaurusAnalyzer::new(&db_path);
         println!("{}", analyzer.get_depgraph_dot());
     }

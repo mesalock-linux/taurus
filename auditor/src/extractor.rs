@@ -164,7 +164,7 @@ impl TaurusExtractor {
     }
 
     fn audit_analyze<'tcx>(&mut self, compiler: &interface::Compiler, tcx: TyCtxt<'_, 'tcx, 'tcx>) {
-        let db_path = self.output_dir.join("taurus.sled");
+        let db_path = self.output_dir.join("taurus.depstore");
         info!(
             "storing results of compile unit {} at {}",
             self.file_name,

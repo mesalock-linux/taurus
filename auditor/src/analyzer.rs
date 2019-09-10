@@ -43,7 +43,7 @@ impl TaurusAnalyzer {
         // construct the graph and record language items that should be pruned
         let mut lang_items = HashSet::<NodeIndex<DefaultIx>>::new();
 
-        for (caller, call_edges) in self.calledge_db.iter() {
+        self.calledge_db.for_each(|(caller, call_edges)| {
             let caller_idx = get_nodeidx(&mut ret, &caller);
             for call_edge in call_edges {
                 let callee_idx = get_nodeidx(&mut ret, &call_edge.callee_name);
@@ -52,7 +52,7 @@ impl TaurusAnalyzer {
                     lang_items.insert(caller_idx);
                 }
             }
-        }
+        });
 
         // prune edges (and dangling nodes) reached from language items using bfs
         let mut edges_to_prune = HashSet::<EdgeIndex<DefaultIx>>::new();
@@ -75,8 +75,9 @@ impl TaurusAnalyzer {
                     .edges_directed(prune_candidate, Direction::Incoming)
                     .all(|edge_ref| edges_to_prune.contains(&edge_ref.id()))
                 {
-                    worklist.push(prune_candidate);
-                    nodes_to_prune.insert(prune_candidate);
+                    if nodes_to_prune.insert(prune_candidate) {
+                        worklist.push(prune_candidate);
+                    }
                 }
             }
         }

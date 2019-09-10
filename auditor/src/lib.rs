@@ -15,7 +15,7 @@ extern crate syntax_pos;
 extern crate log;
 #[macro_use]
 extern crate serde_derive;
-extern crate sled;
+extern crate rusqlite;
 
 extern crate taurus_attributes;
 
