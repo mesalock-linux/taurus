@@ -1,6 +1,6 @@
-use rustc::hir::def_id::{DefId, LOCAL_CRATE};
+use rustc::hir::def_id::DefId;
 use rustc::hir::map::DefPathData;
-use rustc::ty::print::with_crate_prefix;
+use rustc::ty::subst::SubstsRef;
 use rustc::ty::TyCtxt;
 use syntax::source_map::SourceMap;
 use syntax_pos::Loc;
@@ -23,6 +23,8 @@ extern crate serde;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 
+use crate::utils::*;
+
 pub const FNPTR_DEF_NAME_CANONICAL: &'static str = "@fnptr";
 
 pub struct Canonical<'a, 'gcx: 'tcx, 'tcx: 'a, 'rtcx>
@@ -30,21 +32,13 @@ where
     'tcx: 'rtcx,
 {
     tcx: &'rtcx TyCtxt<'a, 'gcx, 'tcx>,
-    crate_name: String,
     source_map: Rc<SourceMap>,
 }
 
 impl<'a, 'gcx, 'tcx, 'rtcx> Canonical<'a, 'gcx, 'tcx, 'rtcx> {
     pub fn new(tcx: &'rtcx TyCtxt<'a, 'gcx, 'tcx>, source_map: Rc<SourceMap>) -> Self {
-        let crate_name = tcx
-            .crate_name(LOCAL_CRATE)
-            .as_interned_str()
-            .as_str()
-            .to_string();
-
         Self {
             tcx,
-            crate_name,
             source_map,
         }
     }
@@ -57,41 +51,10 @@ impl<'a, 'gcx, 'tcx, 'rtcx> Canonical<'a, 'gcx, 'tcx, 'rtcx> {
         &self.source_map
     }
 
-    pub fn monoitem_name<T: std::fmt::Display>(&self, inst: &T) -> String {
-        const CRATE_PREFIX: &'static str = "crate::";
-        const VALID_RUST_IDENT_CHAR: &'static str =
-            "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_";
-
-        let plain = with_crate_prefix(|| format!("{}", inst));
-        let mut replace_points = plain.match_indices(CRATE_PREFIX).filter(|(idx, _)| {
-            let i = *idx;
-            i == 0usize
-                || VALID_RUST_IDENT_CHAR
-                    .find(plain.get(i - 1..i).unwrap())
-                    .is_none()
-        });
-
-        match replace_points.next() {
-            None => plain,
-            Some((first, _)) => {
-                let crate_prefix_len = CRATE_PREFIX.len();
-                let mut ret = String::new();
-                ret.push_str(plain.get(..first).unwrap());
-                let mut prev = first;
-                for (i, _) in replace_points {
-                    ret.push_str(&self.crate_name);
-                    ret.push_str("::");
-                    prev += crate_prefix_len;
-                    ret.push_str(plain.get(prev..i).unwrap());
-                    prev = i;
-                }
-                ret.push_str(&self.crate_name);
-                ret.push_str("::");
-                prev += crate_prefix_len;
-                ret.push_str(plain.get(prev..).unwrap());
-                ret
-            }
-        }
+    pub fn monoitem_name(&self, def_id: DefId, substs: SubstsRef<'tcx>) -> String {
+        let mut def_name = self.def_name(def_id);
+        append_type_args_name(&mut def_name, self.tcx, substs);
+        def_name
     }
 
     pub fn def_name(&self, def_id: DefId) -> String {

@@ -4,7 +4,7 @@ use rustc::hir::def_id::DefId;
 use rustc::mir::mono::MonoItem;
 use rustc::mir::visit::Visitor;
 use rustc::mir::{Location, Mir, Operand};
-use rustc::ty::{Instance, InstanceDef, ParamEnv, TyCtxt, TyKind};
+use rustc::ty::{Instance, InstanceDef, TyCtxt, TyKind};
 use rustc_interface::interface;
 use rustc_mir::monomorphize::collector::{collect_crate_mono_items, MonoItemCollectionMode};
 
@@ -25,35 +25,27 @@ impl<'a, 'b: 'a, 'tcx: 'b> Visitor<'tcx> for MirScanner<'a, 'b, 'tcx> {
     fn visit_operand(&mut self, operand: &Operand<'tcx>, mir_loc: Location) {
         match operand.ty(self.body, *self.canonical.tcx()).sty {
             TyKind::FnDef(callee_def_id, substs) => {
-                if let None = self.canonical.tcx().trait_of_item(callee_def_id) {
-                    let loc = self
-                        .canonical
-                        .source_map()
-                        .lookup_char_pos(self.body.source_info(mir_loc).span.lo());
+                let loc = self
+                    .canonical
+                    .source_map()
+                    .lookup_char_pos(self.body.source_info(mir_loc).span.lo());
 
-                    let callee_inst = Instance::resolve(
-                        *self.canonical.tcx(),
-                        ParamEnv::reveal_all(),
-                        callee_def_id,
-                        substs,
-                    )
-                    .unwrap();
+                let type_params: Vec<String> = Vec::new();
+                    /*substs
+                    .into_iter()
+                    .map(|ty| self.canonical.monoitem_name(ty))
+                    .collect();
+                    */
 
-                    let type_params: Vec<String> = substs
-                        .into_iter()
-                        .map(|ty| self.canonical.monoitem_name(ty))
-                        .collect();
+                let val = CallEdge {
+                    callee_name: self.canonical.monoitem_name(callee_def_id, substs),
+                    callee_def: self.canonical.def_name(callee_def_id),
+                    is_lang_item: self.is_lang_item,
+                    type_params,
+                    src_loc: (&loc).into(),
+                };
 
-                    let val = CallEdge {
-                        callee_name: self.canonical.monoitem_name(&callee_inst),
-                        callee_def: self.canonical.def_name(callee_inst.def_id()),
-                        is_lang_item: self.is_lang_item,
-                        type_params,
-                        src_loc: (&loc).into(),
-                    };
-
-                    self.result.push(val);
-                }
+                self.result.push(val);
             }
             TyKind::FnPtr(..) => {
                 // An indirect call is encountered
@@ -187,7 +179,7 @@ impl TaurusExtractor {
         let mir = tcx.instance_mir(mono_instance.def);
         let call_edges = MirScanner::scan(mir, canonical, is_lang_item);
 
-        (canonical.monoitem_name(mono_instance), call_edges)
+        (canonical.monoitem_name(mono_instance.def.def_id(), mono_instance.substs), call_edges)
     }
 
     fn audit_analyze<'tcx>(&mut self, compiler: &interface::Compiler, tcx: TyCtxt<'_, 'tcx, 'tcx>) {
