@@ -4,6 +4,11 @@ version = "0.0.1"
 authors = ["Pei Wang <wangpei10@baidu.com>"]
 edition = "2018"
 
+[features]
+default = ["use_sled"]
+use_sled = []
+use_sqlite = []
+
 [lib]
 test = false
 doctest = false
@@ -14,7 +19,8 @@ path = "src/main.rs"
 
 [dependencies]
 log = "*"
-rusqlite = { version = "*", feature = ["bundled"] }
+sled = { version = "*", feature = ["use_sled"] }
+rusqlite = { version = "*", feature = ["use_sqlite"] }
 env_logger = "*"
 fs2 = "*"
 serde = "*"

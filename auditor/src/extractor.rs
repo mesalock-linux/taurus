@@ -2,7 +2,8 @@ extern crate seahash;
 
 use rustc::hir::def_id::DefId;
 use rustc::mir::mono::MonoItem;
-use rustc::mir::TerminatorKind;
+use rustc::mir::visit::Visitor;
+use rustc::mir::{Location, Mir, Operand};
 use rustc::ty::{Instance, InstanceDef, ParamEnv, TyCtxt, TyKind};
 use rustc_interface::interface;
 use rustc_mir::monomorphize::collector::{collect_crate_mono_items, MonoItemCollectionMode};
@@ -12,6 +13,92 @@ use std::path::PathBuf;
 
 use crate::annotated::*;
 use crate::summaries::*;
+
+struct MirScanner<'a, 'b, 'tcx: 'b> {
+    pub canonical: &'a Canonical<'b, 'tcx, 'tcx, 'a>,
+    pub result: Vec<CallEdge>,
+    pub body: &'a Mir<'tcx>,
+    pub is_lang_item: bool,
+}
+
+impl<'a, 'b: 'a, 'tcx: 'b> Visitor<'tcx> for MirScanner<'a, 'b, 'tcx> {
+    fn visit_operand(&mut self, operand: &Operand<'tcx>, mir_loc: Location) {
+        match operand.ty(self.body, *self.canonical.tcx()).sty {
+            TyKind::FnDef(callee_def_id, substs) => {
+                if let None = self.canonical.tcx().trait_of_item(callee_def_id) {
+                    let loc = self
+                        .canonical
+                        .source_map()
+                        .lookup_char_pos(self.body.source_info(mir_loc).span.lo());
+
+                    let callee_inst = Instance::resolve(
+                        *self.canonical.tcx(),
+                        ParamEnv::reveal_all(),
+                        callee_def_id,
+                        substs,
+                    )
+                    .unwrap();
+
+                    let type_params: Vec<String> = substs
+                        .into_iter()
+                        .map(|ty| self.canonical.monoitem_name(ty))
+                        .collect();
+
+                    let val = CallEdge {
+                        callee_name: self.canonical.monoitem_name(&callee_inst),
+                        callee_def: self.canonical.def_name(callee_inst.def_id()),
+                        is_lang_item: self.is_lang_item,
+                        type_params,
+                        src_loc: (&loc).into(),
+                    };
+
+                    self.result.push(val);
+                }
+            }
+            TyKind::FnPtr(..) => {
+                // An indirect call is encountered
+                let loc = self
+                    .canonical
+                    .source_map()
+                    .lookup_char_pos(self.body.source_info(mir_loc).span.lo());
+                let src_loc_pretty = format!("{:#?}", loc);
+                let encoded = seahash::hash(&src_loc_pretty.as_bytes());
+
+                let val = CallEdge {
+                    callee_name: format!("@indirct#{}", encoded),
+                    callee_def: FNPTR_DEF_NAME_CANONICAL.to_string(),
+                    is_lang_item: self.is_lang_item,
+                    type_params: Vec::new(),
+                    src_loc: (&loc).into(),
+                };
+
+                self.result.push(val);
+            }
+            _ => (),
+        }
+
+        self.super_operand(operand, mir_loc);
+    }
+}
+
+impl<'a, 'b: 'a, 'tcx: 'b> MirScanner<'a, 'b, 'tcx> {
+    pub fn scan(
+        mir_body: &'a Mir<'tcx>,
+        canonical: &'a Canonical<'b, 'tcx, 'tcx, 'a>,
+        is_lang_item: bool,
+    ) -> Vec<CallEdge> {
+        let mut mir_scanner = MirScanner {
+            canonical,
+            result: Vec::new(),
+            body: &mir_body,
+            is_lang_item,
+        };
+
+        mir_scanner.visit_mir(mir_body);
+
+        mir_scanner.result
+    }
+}
 
 pub struct TaurusExtractor {
     file_name: String,
@@ -84,9 +171,7 @@ impl TaurusExtractor {
         mono_instance: &Instance<'tcx>,
     ) -> (String, Vec<CallEdge>) {
         let tcx = canonical.tcx();
-        let src_map = canonical.source_map();
 
-        let mut call_edges: Vec<CallEdge> = Vec::new();
         let is_lang_item = self.lang_items.contains(&mono_instance.def_id()) || {
             if let Some(hir_id) = tcx.hir().as_local_hir_id(mono_instance.def_id()) {
                 let parent_did = tcx.hir().get_parent_did_by_hir_id(hir_id);
@@ -100,65 +185,7 @@ impl TaurusExtractor {
         };
 
         let mir = tcx.instance_mir(mono_instance.def);
-        for bbd in mir.basic_blocks() {
-            let term = bbd.terminator();
-            if let TerminatorKind::Call { func, .. } = &term.kind {
-                let callee_ty = func.ty(mir, *tcx);
-                let callee_ty = tcx.subst_and_normalize_erasing_regions(
-                    mono_instance.substs,
-                    ParamEnv::reveal_all(),
-                    &callee_ty,
-                );
-                let loc = src_map.lookup_char_pos(term.source_info.span.lo());
-
-                if let TyKind::FnDef(callee_def_id, substs) = callee_ty.sty {
-                    let callee_inst =
-                        Instance::resolve(*tcx, ParamEnv::reveal_all(), callee_def_id, substs)
-                            .unwrap();
-
-                    let type_params: Vec<String> = substs
-                        .into_iter()
-                        .map(|ty| canonical.monoitem_name(ty))
-                        .collect();
-
-                    let val = CallEdge {
-                        callee_name: canonical.monoitem_name(&callee_inst),
-                        callee_def: canonical.def_name(callee_inst.def_id()),
-                        is_lang_item,
-                        type_params,
-                        src_loc: (&loc).into(),
-                    };
-
-                    debug!(
-                        "callgraph edge: {} -> {:#?}",
-                        canonical.monoitem_name(mono_instance),
-                        val,
-                    );
-
-                    call_edges.push(val);
-                } else if let TyKind::FnPtr(..) = callee_ty.sty {
-                    // An indirect call is encountered
-                    let src_loc_pretty = format!("{:#?}", loc);
-                    let encoded = seahash::hash(&src_loc_pretty.as_bytes());
-
-                    let val = CallEdge {
-                        callee_name: format!("@indirct#{}", encoded),
-                        callee_def: FNPTR_DEF_NAME_CANONICAL.to_string(),
-                        is_lang_item,
-                        type_params: Vec::new(),
-                        src_loc: (&loc).into(),
-                    };
-
-                    debug!(
-                        "callgraph edge: {} -> {:#?}",
-                        canonical.monoitem_name(mono_instance),
-                        val,
-                    );
-
-                    call_edges.push(val);
-                }
-            }
-        }
+        let call_edges = MirScanner::scan(mir, canonical, is_lang_item);
 
         (canonical.monoitem_name(mono_instance), call_edges)
     }

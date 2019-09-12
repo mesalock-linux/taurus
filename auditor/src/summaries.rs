@@ -5,8 +5,13 @@ use rustc::ty::TyCtxt;
 use syntax::source_map::SourceMap;
 use syntax_pos::Loc;
 
+#[cfg(feature = "use_sqlite")]
 use rusqlite::types::ToSql;
-use rusqlite::{Connection, NO_PARAMS};
+#[cfg(feature = "use_sqlite")]
+use rusqlite::{Connection, MappedRows, Statement, NO_PARAMS};
+
+#[cfg(feature = "use_sled")]
+use sled::{ConfigBuilder, Db};
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -146,6 +151,7 @@ impl From<&Loc> for SourceLocation {
     }
 }
 
+#[cfg(feature = "use_sqlite")]
 pub struct PersistentSummaryStore<V>
 where
     V: Serialize + DeserializeOwned,
@@ -154,6 +160,7 @@ where
     inmem_store: HashMap<String, V>,
 }
 
+#[cfg(feature = "use_sqlite")]
 impl<V> PersistentSummaryStore<V>
 where
     V: Serialize + DeserializeOwned,
@@ -182,22 +189,77 @@ where
 
     pub fn insert(&mut self, k: String, v: V) -> Option<V> {
         let persist_val = bincode::serialize(&v).unwrap();
-        self.persist_store.execute(
-            "INSERT OR REPLACE INTO data(key, value) values(?1, ?2)",
-            &[&k as &ToSql, &persist_val],
-        ).unwrap();
+        self.persist_store
+            .execute(
+                "INSERT OR REPLACE INTO data(key, value) values(?1, ?2)",
+                &[&k as &ToSql, &persist_val],
+            )
+            .unwrap();
         self.inmem_store.insert(k, v)
     }
 
-    pub fn for_each<F: FnMut((String, V)) -> ()>(&self, mut f: F) {
+    pub fn for_each<F: FnMut((String, V)) -> ()>(&self, f: F) {
         let mut stmt = self.persist_store.prepare("SELECT * FROM data").unwrap();
-        let iter = stmt.query_map(NO_PARAMS, |row| {
-            let val: Vec<u8> = row.get(1).unwrap();
-            Ok((
-                row.get(0).unwrap(),
-                bincode::deserialize(&val).unwrap(),
-            ))
-        }).unwrap();
+        let iter = stmt
+            .query_map(NO_PARAMS, |row| {
+                let val: Vec<u8> = row.get(1).unwrap();
+                Ok((row.get(0).unwrap(), bincode::deserialize(&val).unwrap()))
+            })
+            .unwrap();
         iter.for_each(|r| f(r.unwrap()))
+    }
+}
+
+#[cfg(feature = "use_sled")]
+pub struct PersistentSummaryStore<V>
+where
+    V: Serialize + DeserializeOwned,
+{
+    persist_store: Db,
+    inmem_store: HashMap<String, V>,
+}
+
+#[cfg(feature = "use_sled")]
+impl<V> PersistentSummaryStore<V>
+where
+    V: Serialize + DeserializeOwned,
+{
+    pub fn new(persist_db_path: &Path) -> std::io::Result<Self> {
+        if !persist_db_path.exists() {
+            std::fs::create_dir_all(persist_db_path).map_err(|_| {
+                std::io::Error::new(std::io::ErrorKind::NotFound, "invalid db directory")
+            })?;
+        }
+
+        // Need a strategy here to avoid sled racing. For now, just make sure
+        // cargo is invoked with `-j 1`
+        let config = ConfigBuilder::new().path(persist_db_path.clone()).build();
+        let persist_store = Db::start(config).unwrap();
+
+        Ok(Self {
+            persist_store,
+            inmem_store: HashMap::new(),
+        })
+    }
+
+    pub fn insert(&mut self, k: String, v: V) -> Option<V> {
+        let persist_val = bincode::serialize(&v).unwrap();
+        self.persist_store
+            .insert(k.as_bytes(), persist_val)
+            .unwrap();
+        self.inmem_store.insert(k, v)
+    }
+
+    pub fn for_each<F: FnMut((String, V)) -> ()>(&self, f: F) {
+        self.persist_store
+            .iter()
+            .map(|result| {
+                let (key, value) = result.unwrap();
+                (
+                    String::from_utf8(key.to_vec()).unwrap(),
+                    bincode::deserialize::<V>(&value).unwrap(),
+                )
+            })
+            .for_each(f);
     }
 }

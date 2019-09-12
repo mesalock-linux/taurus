@@ -15,7 +15,11 @@ extern crate syntax_pos;
 extern crate log;
 #[macro_use]
 extern crate serde_derive;
+
+#[cfg(feature = "use_sqlite")]
 extern crate rusqlite;
+#[cfg(feature = "use_sled")]
+extern crate sled;
 
 extern crate taurus_attributes;
 
