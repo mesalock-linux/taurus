@@ -1,7 +1,6 @@
 use rustc::hir::def_id::DefId;
-use rustc::hir::map::DefPathData;
 use rustc::ty::subst::SubstsRef;
-use rustc::ty::TyCtxt;
+use rustc::ty::{Ty, TyCtxt};
 use syntax::source_map::SourceMap;
 use syntax_pos::Loc;
 
@@ -37,10 +36,7 @@ where
 
 impl<'a, 'gcx, 'tcx, 'rtcx> Canonical<'a, 'gcx, 'tcx, 'rtcx> {
     pub fn new(tcx: &'rtcx TyCtxt<'a, 'gcx, 'tcx>, source_map: Rc<SourceMap>) -> Self {
-        Self {
-            tcx,
-            source_map,
-        }
+        Self { tcx, source_map }
     }
 
     pub fn tcx(&self) -> &'rtcx TyCtxt<'a, 'gcx, 'tcx> {
@@ -53,40 +49,23 @@ impl<'a, 'gcx, 'tcx, 'rtcx> Canonical<'a, 'gcx, 'tcx, 'rtcx> {
 
     pub fn monoitem_name(&self, def_id: DefId, substs: SubstsRef<'tcx>) -> String {
         let mut def_name = self.def_name(def_id);
-        append_type_args_name(&mut def_name, self.tcx, substs);
+        def_name.push('<');
+        for ty in substs.types() {
+            append_mangled_type(&mut def_name, ty, self.tcx);
+            def_name.push(',');
+        }
+        def_name.push('>');
         def_name
     }
 
+    pub fn normalized_type_name(&self, ty: Ty<'tcx>) -> String {
+        let mut ret = String::new();
+        append_mangled_type(&mut ret, ty, self.tcx);
+        ret
+    }
+
     pub fn def_name(&self, def_id: DefId) -> String {
-        let mut name = self
-            .tcx
-            .crate_name(def_id.krate)
-            .as_interned_str()
-            .as_str()
-            .to_string();
-        for component in &self.tcx.def_path(def_id).data {
-            name.push_str("::");
-            use DefPathData::*;
-            match &component.data {
-                TypeNs(n) | ValueNs(n) | LifetimeNs(n) | MacroNs(n) | GlobalMetaData(n) => {
-                    name.push_str(&n.as_str());
-                }
-                _ => name.push_str(match &component.data {
-                    CrateRoot => "crate_root",
-                    Impl => "impl",
-                    Misc => "misc",
-                    ClosureExpr => "closure",
-                    Ctor => "ctor",
-                    AnonConst => "const",
-                    ImplTrait => "impl_trait",
-                    _ => unreachable!(),
-                }),
-            };
-            name.push('[');
-            name.push_str(component.disambiguator.to_string().as_str());
-            name.push(']');
-        }
-        name
+        qualified_type_name(self.tcx, def_id)
     }
 }
 
@@ -97,12 +76,24 @@ pub struct SourceLocation {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-pub struct CallEdge {
-    pub callee_name: String,
+pub struct DepEdge {
     pub callee_def: String,
     pub is_lang_item: bool,
     pub type_params: Vec<String>,
     pub src_loc: SourceLocation,
+}
+
+impl DepEdge {
+    pub fn full_callee_name(&self) -> String {
+        let mut ret = self.callee_def.clone();
+        ret.push('<');
+        for ty_param in &self.type_params {
+            ret.push_str(&ty_param);
+            ret.push(',');
+        }
+        ret.push('>');
+        ret
+    }
 }
 
 impl From<&Loc> for SourceLocation {

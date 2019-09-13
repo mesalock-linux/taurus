@@ -7,21 +7,8 @@
 
 use rustc::hir::def_id::DefId;
 use rustc::hir::map::DefPathData;
-use rustc::ty::subst::{SubstsRef, UnpackedKind};
+use rustc::ty::subst::UnpackedKind;
 use rustc::ty::{Ty, TyCtxt, TyKind};
-
-pub fn append_type_args_name<'tcx>(
-    result: &mut String,
-    tcx: &TyCtxt<'_, '_, 'tcx>,
-    generic_args: SubstsRef<'tcx>,
-) {
-    result.push('>');
-    for generic_ty_arg in generic_args.types() {
-        result.push(',');
-        append_mangled_type(result, generic_ty_arg, tcx);
-    }
-    result.push('>');
-}
 
 pub fn append_mangled_type<'tcx>(str: &mut String, ty: Ty<'tcx>, tcx: &TyCtxt<'_, '_, 'tcx>) {
     use syntax::ast;
@@ -148,15 +135,12 @@ pub fn append_mangled_type<'tcx>(str: &mut String, ty: Ty<'tcx>, tcx: &TyCtxt<'_
             str.push_str(qualified_type_name(tcx, projection_ty.item_def_id).as_str());
         }
         _ => {
-            //todo: add cases as the need arises, meanwhile make the need obvious.
-            debug!("{:?}", ty);
-            debug!("{:?}", ty.sty);
-            str.push_str(&format!("default formatted {:?}", ty))
+            panic!("case not handled: {:?}", ty);
         }
     }
 }
 
-fn qualified_type_name(tcx: &TyCtxt<'_, '_, '_>, def_id: DefId) -> String {
+pub fn qualified_type_name(tcx: &TyCtxt<'_, '_, '_>, def_id: DefId) -> String {
     let mut name = if def_id.is_local() {
         tcx.crate_name.as_interned_str().as_str().to_string()
     } else {
@@ -173,7 +157,6 @@ fn qualified_type_name(tcx: &TyCtxt<'_, '_, '_>, def_id: DefId) -> String {
         let da = component.disambiguator.to_string();
         name.push_str(da.as_str());
         name.push(']');
-
     }
     name
 }
@@ -186,12 +169,12 @@ fn push_component_name(component_data: &DefPathData, target: &mut String) {
         }
         _ => target.push_str(match component_data {
             CrateRoot => "crate_root",
-            Impl => "implement",
-            Misc => "miscellaneous",
+            Impl => "impl",
+            Misc => "misc",
             ClosureExpr => "closure",
             Ctor => "ctor",
-            AnonConst => "constant",
-            ImplTrait => "implement_trait",
+            AnonConst => "const",
+            ImplTrait => "impl_trait",
             _ => unreachable!(),
         }),
     };

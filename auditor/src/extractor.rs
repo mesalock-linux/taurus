@@ -3,7 +3,7 @@ extern crate seahash;
 use rustc::hir::def_id::DefId;
 use rustc::mir::mono::MonoItem;
 use rustc::mir::visit::Visitor;
-use rustc::mir::{Location, Mir, Operand};
+use rustc::mir::{Location, Mir, Operand, Terminator, TerminatorKind};
 use rustc::ty::{Instance, InstanceDef, TyCtxt, TyKind};
 use rustc_interface::interface;
 use rustc_mir::monomorphize::collector::{collect_crate_mono_items, MonoItemCollectionMode};
@@ -16,39 +16,15 @@ use crate::summaries::*;
 
 struct MirScanner<'a, 'b, 'tcx: 'b> {
     pub canonical: &'a Canonical<'b, 'tcx, 'tcx, 'a>,
-    pub result: Vec<CallEdge>,
+    pub result: Vec<DepEdge>,
     pub body: &'a Mir<'tcx>,
     pub is_lang_item: bool,
 }
 
 impl<'a, 'b: 'a, 'tcx: 'b> Visitor<'tcx> for MirScanner<'a, 'b, 'tcx> {
-    fn visit_operand(&mut self, operand: &Operand<'tcx>, mir_loc: Location) {
-        match operand.ty(self.body, *self.canonical.tcx()).sty {
-            TyKind::FnDef(callee_def_id, substs) => {
-                let loc = self
-                    .canonical
-                    .source_map()
-                    .lookup_char_pos(self.body.source_info(mir_loc).span.lo());
-
-                let type_params: Vec<String> = Vec::new();
-                    /*substs
-                    .into_iter()
-                    .map(|ty| self.canonical.monoitem_name(ty))
-                    .collect();
-                    */
-
-                let val = CallEdge {
-                    callee_name: self.canonical.monoitem_name(callee_def_id, substs),
-                    callee_def: self.canonical.def_name(callee_def_id),
-                    is_lang_item: self.is_lang_item,
-                    type_params,
-                    src_loc: (&loc).into(),
-                };
-
-                self.result.push(val);
-            }
-            TyKind::FnPtr(..) => {
-                // An indirect call is encountered
+    fn visit_terminator(&mut self, term: &Terminator<'tcx>, mir_loc: Location) {
+        if let TerminatorKind::Call { func, .. } = &term.kind {
+            if let TyKind::FnPtr(..) = func.ty(self.body, *self.canonical.tcx()).sty {
                 let loc = self
                     .canonical
                     .source_map()
@@ -56,9 +32,8 @@ impl<'a, 'b: 'a, 'tcx: 'b> Visitor<'tcx> for MirScanner<'a, 'b, 'tcx> {
                 let src_loc_pretty = format!("{:#?}", loc);
                 let encoded = seahash::hash(&src_loc_pretty.as_bytes());
 
-                let val = CallEdge {
-                    callee_name: format!("@indirct#{}", encoded),
-                    callee_def: FNPTR_DEF_NAME_CANONICAL.to_string(),
+                let val = DepEdge {
+                    callee_def: format!("{}#{}", FNPTR_DEF_NAME_CANONICAL, encoded),
                     is_lang_item: self.is_lang_item,
                     type_params: Vec::new(),
                     src_loc: (&loc).into(),
@@ -66,7 +41,34 @@ impl<'a, 'b: 'a, 'tcx: 'b> Visitor<'tcx> for MirScanner<'a, 'b, 'tcx> {
 
                 self.result.push(val);
             }
-            _ => (),
+        }
+
+        self.super_terminator(term, mir_loc);
+    }
+
+    fn visit_operand(&mut self, operand: &Operand<'tcx>, mir_loc: Location) {
+        if let TyKind::FnDef(callee_def_id, substs) =
+            operand.ty(self.body, *self.canonical.tcx()).sty
+        {
+            let loc = self
+                .canonical
+                .source_map()
+                .lookup_char_pos(self.body.source_info(mir_loc).span.lo());
+
+            let type_params: Vec<String> = substs
+                .types()
+                .into_iter()
+                .map(|ty| self.canonical.normalized_type_name(ty))
+                .collect();
+
+            let val = DepEdge {
+                callee_def: self.canonical.def_name(callee_def_id),
+                is_lang_item: self.is_lang_item,
+                type_params,
+                src_loc: (&loc).into(),
+            };
+
+            self.result.push(val);
         }
 
         self.super_operand(operand, mir_loc);
@@ -78,7 +80,7 @@ impl<'a, 'b: 'a, 'tcx: 'b> MirScanner<'a, 'b, 'tcx> {
         mir_body: &'a Mir<'tcx>,
         canonical: &'a Canonical<'b, 'tcx, 'tcx, 'a>,
         is_lang_item: bool,
-    ) -> Vec<CallEdge> {
+    ) -> Vec<DepEdge> {
         let mut mir_scanner = MirScanner {
             canonical,
             result: Vec::new(),
@@ -161,7 +163,7 @@ impl TaurusExtractor {
         &mut self,
         canonical: &Canonical<'_, 'tcx, 'tcx, '_>,
         mono_instance: &Instance<'tcx>,
-    ) -> (String, Vec<CallEdge>) {
+    ) -> (String, Vec<DepEdge>) {
         let tcx = canonical.tcx();
 
         let is_lang_item = self.lang_items.contains(&mono_instance.def_id()) || {
@@ -179,7 +181,10 @@ impl TaurusExtractor {
         let mir = tcx.instance_mir(mono_instance.def);
         let call_edges = MirScanner::scan(mir, canonical, is_lang_item);
 
-        (canonical.monoitem_name(mono_instance.def.def_id(), mono_instance.substs), call_edges)
+        (
+            canonical.monoitem_name(mono_instance.def.def_id(), mono_instance.substs),
+            call_edges,
+        )
     }
 
     fn audit_analyze<'tcx>(&mut self, compiler: &interface::Compiler, tcx: TyCtxt<'_, 'tcx, 'tcx>) {
@@ -195,7 +200,7 @@ impl TaurusExtractor {
                 .expect("failed to access consistent storage");
 
         let mut calledge_db =
-            PersistentSummaryStore::<Vec<CallEdge>>::new(&db_path.join("calledge"))
+            PersistentSummaryStore::<Vec<DepEdge>>::new(&db_path.join("calledge"))
                 .expect("failed to access consistent storage");
 
         let hir_map = tcx.hir();

@@ -12,7 +12,7 @@ use crate::summaries::*;
 
 pub struct TaurusAnalyzer {
     marking_db: PersistentSummaryStore<SourceLocation>,
-    calledge_db: PersistentSummaryStore<Vec<CallEdge>>,
+    calledge_db: PersistentSummaryStore<Vec<DepEdge>>,
 }
 
 pub type DepGraph = StableGraph<String, (), Directed, DefaultIx>;
@@ -22,7 +22,7 @@ impl TaurusAnalyzer {
         Self {
             marking_db: PersistentSummaryStore::<SourceLocation>::new(&db_path.join("marking"))
                 .expect("failed to access consistent storage"),
-            calledge_db: PersistentSummaryStore::<Vec<CallEdge>>::new(&db_path.join("calledge"))
+            calledge_db: PersistentSummaryStore::<Vec<DepEdge>>::new(&db_path.join("calledge"))
                 .expect("failed to access consistent storage"),
         }
     }
@@ -46,7 +46,7 @@ impl TaurusAnalyzer {
         self.calledge_db.for_each(|(caller, call_edges)| {
             let caller_idx = get_nodeidx(&mut ret, &caller);
             for call_edge in call_edges {
-                let callee_idx = get_nodeidx(&mut ret, &call_edge.callee_name);
+                let callee_idx = get_nodeidx(&mut ret, &call_edge.full_callee_name());
                 ret.add_edge(caller_idx, callee_idx, ());
                 if call_edge.is_lang_item {
                     lang_items.insert(caller_idx);
