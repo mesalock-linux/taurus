@@ -195,31 +195,31 @@ impl TaurusExtractor {
             db_path.to_str().unwrap()
         );
 
-        let mut marking_db =
-            PersistentSummaryStore::<SourceLocation>::new(&db_path.join("marking"))
-                .expect("failed to access consistent storage");
+        let mut marking_db = PersistentSummaryStore::<MarkedItem>::new(&db_path.join("marking"))
+            .expect("failed to access consistent storage");
 
         let mut calledge_db =
             PersistentSummaryStore::<Vec<DepEdge>>::new(&db_path.join("calledge"))
                 .expect("failed to access consistent storage");
 
         let hir_map = tcx.hir();
-        let funcs_to_audit = extract_functions_to_audit(&tcx);
+        let funcs_to_audit = extract_functions_to_audit(&taurus_attributes::Symbols::new(), &tcx);
 
         let canonical = Canonical::new(&tcx, compiler.source_map().clone());
 
-        for hir_id in &funcs_to_audit {
-            let def_id = hir_map.local_def_id_from_hir_id(*hir_id);
+        for (hir_id, mark) in funcs_to_audit {
+            let def_id = hir_map.local_def_id_from_hir_id(hir_id);
             let name = canonical.def_name(def_id);
             let span = tcx.def_span(def_id);
             let src_loc = canonical.source_map().lookup_char_pos(span.lo());
 
-            debug!(
-                "marking {}:\n{}",
+            marking_db.insert(
                 name,
-                hir_map.hir_to_pretty_string(*hir_id)
+                MarkedItem {
+                    mark,
+                    src_loc: (&src_loc).into(),
+                },
             );
-            marking_db.insert(name, (&src_loc).into());
         }
 
         let (mono_items, _) = collect_crate_mono_items(tcx, MonoItemCollectionMode::Eager);

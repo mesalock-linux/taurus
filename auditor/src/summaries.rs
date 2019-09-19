@@ -75,6 +75,19 @@ pub struct SourceLocation {
     pub line_no: usize,
 }
 
+#[derive(PartialEq, Eq, Clone, Serialize, Deserialize, Debug)]
+pub enum Marking {
+    RequireAudit(String),
+    Audited(String),
+    EntryPoint,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct MarkedItem {
+    pub mark: Marking,
+    pub src_loc: SourceLocation,
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 pub struct DepEdge {
     pub callee_def: String,

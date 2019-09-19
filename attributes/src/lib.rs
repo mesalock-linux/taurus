@@ -9,7 +9,7 @@ macro_rules! symbols {
         #[derive(Clone)]
         #[allow(non_snake_case)]
         pub struct Symbols {
-            pub $($s: Symbol,)+
+            $(pub $s: Symbol,)+
         }
 
         impl Symbols {
@@ -24,4 +24,6 @@ macro_rules! symbols {
 
 symbols! {
     require_audit,
+    audited,
+    entry_point,
 }
