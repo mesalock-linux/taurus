@@ -125,12 +125,30 @@ pub fn extract_functions_to_audit(
                 }
                 _ => panic!(
                     "#[{}] can only annotate functions and methods",
-                    &taurus_annotations.require_audit
+                    taurus_annotations.require_audit,
                 ),
             }
         }
     }
 
+    // Collect entry points
+    for (_, item) in &hir_map.krate().items {
+        if let Some(_) = syntax::attr::find_by_name(&item.attrs, taurus_annotations.entry_point) {
+            if let ItemKind::Fn(_, _, generics, body_id) = &item.node {
+                if generics.params.len() == 0 {
+                    funcs.insert(body_id.hir_id, Marking::EntryPoint);
+                    continue;
+                }
+            }
+
+            panic!(
+                "#[{}] can only annotate functions that are non-generic",
+                taurus_annotations.entry_point,
+            );
+        }
+    }
+
+    // Propogate require_audit annotations to items associated with marked ADTs
     for (_, trait_impls) in &hir_map.krate().trait_impls {
         for trait_impl in trait_impls {
             let impl_def_id = hir_map.local_def_id_from_hir_id(*trait_impl);

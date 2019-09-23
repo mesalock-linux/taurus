@@ -69,7 +69,7 @@ impl<'a, 'gcx, 'tcx, 'rtcx> Canonical<'a, 'gcx, 'tcx, 'rtcx> {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct SourceLocation {
     pub file: String,
     pub line_no: usize,
@@ -82,7 +82,7 @@ pub enum Marking {
     EntryPoint,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct MarkedItem {
     pub mark: Marking,
     pub src_loc: SourceLocation,
@@ -228,5 +228,16 @@ where
                 )
             })
             .for_each(f);
+    }
+
+    pub fn get<T: AsRef<str>>(&self, key: T) -> Option<V> {
+        self.persist_store
+            .get(key.as_ref())
+            .unwrap()
+            .map(|bin| bincode::deserialize::<V>(&bin).unwrap())
+    }
+
+    pub fn len(&self) -> usize {
+        self.persist_store.len()
     }
 }
