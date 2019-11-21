@@ -21,7 +21,7 @@ fn extract_meta_value(attr: &Attribute) -> String {
 
 pub fn extract_functions_to_audit(
     taurus_annotations: &taurus_attributes::Symbols,
-    tcx: &TyCtxt<'_, '_, '_>,
+    tcx: &TyCtxt<'_>,
 ) -> HashMap<HirId, Marking> {
     let mut funcs: HashMap<HirId, Marking> = HashMap::new();
     let hir_map = tcx.hir();
@@ -86,7 +86,7 @@ pub fn extract_functions_to_audit(
                     );
                 }
                 ItemKind::Enum(..) | ItemKind::Struct(..) | ItemKind::Union(..) => {
-                    let def_id = hir_map.local_def_id_from_hir_id(item.hir_id);
+                    let def_id = hir_map.local_def_id(item.hir_id);
                     let ty = tcx.type_of(def_id);
                     if let Some(simplified_self_ty) = fast_reject::simplify_type(*tcx, ty, false) {
                         marked_adts.insert(
@@ -103,7 +103,7 @@ pub fn extract_functions_to_audit(
                 // traits directly.
                 ItemKind::Trait(_, _, _, _, trait_items) => {
                     for trait_item in trait_items {
-                        if let AssociatedItemKind::Method { .. } = trait_item.kind {
+                        if let AssocItemKind::Method { .. } = trait_item.kind {
                             if trait_item.defaultness.has_value() {
                                 funcs.insert(
                                     trait_item.id.hir_id,
@@ -115,7 +115,7 @@ pub fn extract_functions_to_audit(
                 }
                 ItemKind::Impl(_, ImplPolarity::Positive, _, _, _, _, impl_items) => {
                     for impl_item in impl_items {
-                        if let AssociatedItemKind::Method { .. } = impl_item.kind {
+                        if let AssocItemKind::Method { .. } = impl_item.kind {
                             funcs.insert(
                                 impl_item.id.hir_id,
                                 Marking::RequireAudit(extract_meta_value(attr)),
@@ -151,8 +151,8 @@ pub fn extract_functions_to_audit(
     // Propogate require_audit annotations to items associated with marked ADTs
     for (_, trait_impls) in &hir_map.krate().trait_impls {
         for trait_impl in trait_impls {
-            let impl_def_id = hir_map.local_def_id_from_hir_id(*trait_impl);
-            if let Some(Node::Item(item)) = hir_map.find_by_hir_id(*trait_impl) {
+            let impl_def_id = hir_map.local_def_id(*trait_impl);
+            if let Some(Node::Item(item)) = hir_map.find(*trait_impl) {
                 if let ItemKind::Impl(_, ImplPolarity::Positive, _, _, _, _, impl_items) =
                     &item.node
                 {
@@ -162,7 +162,7 @@ pub fn extract_functions_to_audit(
                     {
                         if let Some(adt_marking) = marked_adts.get(&simplified_self_ty) {
                             for impl_item in impl_items {
-                                if let AssociatedItemKind::Method { .. } = impl_item.kind {
+                                if let AssocItemKind::Method { .. } = impl_item.kind {
                                     funcs.insert(impl_item.id.hir_id, adt_marking.clone());
                                 }
                             }

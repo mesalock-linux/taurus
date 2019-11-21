@@ -10,7 +10,7 @@ use rusqlite::types::ToSql;
 use rusqlite::{Connection, MappedRows, Statement, NO_PARAMS};
 
 #[cfg(feature = "use_sled")]
-use sled::{ConfigBuilder, Db};
+use sled::Db;
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -26,20 +26,20 @@ use crate::utils::*;
 
 pub const FNPTR_DEF_NAME_CANONICAL: &'static str = "@fnptr";
 
-pub struct Canonical<'a, 'gcx: 'tcx, 'tcx: 'a, 'rtcx>
+pub struct Canonical<'tcx, 'rtcx>
 where
     'tcx: 'rtcx,
 {
-    tcx: &'rtcx TyCtxt<'a, 'gcx, 'tcx>,
+    tcx: &'rtcx TyCtxt<'tcx>,
     source_map: Rc<SourceMap>,
 }
 
-impl<'a, 'gcx, 'tcx, 'rtcx> Canonical<'a, 'gcx, 'tcx, 'rtcx> {
-    pub fn new(tcx: &'rtcx TyCtxt<'a, 'gcx, 'tcx>, source_map: Rc<SourceMap>) -> Self {
+impl<'tcx, 'rtcx> Canonical<'tcx, 'rtcx> {
+    pub fn new(tcx: &'rtcx TyCtxt<'tcx>, source_map: Rc<SourceMap>) -> Self {
         Self { tcx, source_map }
     }
 
-    pub fn tcx(&self) -> &'rtcx TyCtxt<'a, 'gcx, 'tcx> {
+    pub fn tcx(&self) -> &'rtcx TyCtxt<'tcx> {
         self.tcx
     }
 
@@ -200,8 +200,7 @@ where
 
         // Need a strategy here to avoid sled racing. For now, just make sure
         // cargo is invoked with `-j 1`
-        let config = ConfigBuilder::new().path(persist_db_path.clone()).build();
-        let persist_store = Db::start(config).unwrap();
+        let persist_store = Db::open(persist_db_path.clone()).unwrap();
 
         Ok(Self {
             persist_store,

@@ -3,7 +3,7 @@ extern crate seahash;
 use rustc::hir::def_id::DefId;
 use rustc::mir::mono::MonoItem;
 use rustc::mir::visit::Visitor;
-use rustc::mir::{Location, Mir, Operand, Terminator, TerminatorKind};
+use rustc::mir::{Location, Body, Operand, Terminator, TerminatorKind};
 use rustc::ty::{Instance, InstanceDef, TyCtxt, TyKind};
 use rustc_interface::interface;
 use rustc_mir::monomorphize::collector::{collect_crate_mono_items, MonoItemCollectionMode};
@@ -14,14 +14,14 @@ use std::path::PathBuf;
 use crate::annotated::*;
 use crate::summaries::*;
 
-struct MirScanner<'a, 'b, 'tcx: 'b> {
-    pub canonical: &'a Canonical<'b, 'tcx, 'tcx, 'a>,
+struct MirScanner<'a, 'tcx: 'a> {
+    pub canonical: &'a Canonical<'tcx, 'a>,
     pub result: Vec<DepEdge>,
-    pub body: &'a Mir<'tcx>,
+    pub body: &'a Body<'tcx>,
     pub is_lang_item: bool,
 }
 
-impl<'a, 'b: 'a, 'tcx: 'b> Visitor<'tcx> for MirScanner<'a, 'b, 'tcx> {
+impl<'a, 'tcx: 'a> Visitor<'tcx> for MirScanner<'a, 'tcx> {
     fn visit_terminator(&mut self, term: &Terminator<'tcx>, mir_loc: Location) {
         if let TerminatorKind::Call { func, .. } = &term.kind {
             if let TyKind::FnPtr(..) = func.ty(self.body, *self.canonical.tcx()).sty {
@@ -75,10 +75,10 @@ impl<'a, 'b: 'a, 'tcx: 'b> Visitor<'tcx> for MirScanner<'a, 'b, 'tcx> {
     }
 }
 
-impl<'a, 'b: 'a, 'tcx: 'b> MirScanner<'a, 'b, 'tcx> {
+impl<'a, 'tcx: 'a> MirScanner<'a, 'tcx> {
     pub fn scan(
-        mir_body: &'a Mir<'tcx>,
-        canonical: &'a Canonical<'b, 'tcx, 'tcx, 'a>,
+        mir_body: &'a Body<'tcx>,
+        canonical: &'a Canonical<'tcx, 'a>,
         is_lang_item: bool,
     ) -> Vec<DepEdge> {
         let mut mir_scanner = MirScanner {
@@ -88,7 +88,7 @@ impl<'a, 'b: 'a, 'tcx: 'b> MirScanner<'a, 'b, 'tcx> {
             is_lang_item,
         };
 
-        mir_scanner.visit_mir(mir_body);
+        mir_scanner.visit_body(mir_body);
 
         mir_scanner.result
     }
@@ -127,7 +127,7 @@ impl rustc_driver::Callbacks for TaurusExtractor {
     /// Called after the compiler has completed all analysis passes and before
     /// it lowers MIR to LLVM IR. At this stage, generics have been instantiated
     /// and we should have everything we need for the audit analysis
-    fn after_analysis(&mut self, compiler: &interface::Compiler) -> bool {
+    fn after_analysis(&mut self, compiler: &interface::Compiler) -> rustc_driver::Compilation {
         // if !compiler.session().rust_2018() {
         //     compiler.session().fatal("taurus can only audit Rust 2018 projects");
         // }
@@ -136,13 +136,13 @@ impl rustc_driver::Callbacks for TaurusExtractor {
 
         if self.output_dir.to_str().unwrap().contains("/build/") {
             // Build scripts do not need to be audited
-            return true;
+            return rustc_driver::Compilation::Continue;
         }
         // We don't want to analyze our own stuff
         if self.file_name.contains("/taurus/annotation")
             || self.file_name.contains("/taurus/attributes")
         {
-            return true;
+            return rustc_driver::Compilation::Continue;
         }
         info!("Processing input file: {}", self.file_name);
         compiler.global_ctxt().unwrap().peek_mut().enter(|tcx| {
@@ -154,21 +154,22 @@ impl rustc_driver::Callbacks for TaurusExtractor {
             }
             self.audit_analyze(compiler, tcx)
         });
-        true // return true such that rustc can continue to emit LLVM bitcode
+        // return Continue such that rustc can continue to emit LLVM bitcode
+        rustc_driver::Compilation::Continue
     }
 }
 
 impl TaurusExtractor {
     fn collect_call_edges<'tcx>(
         &mut self,
-        canonical: &Canonical<'_, 'tcx, 'tcx, '_>,
+        canonical: &Canonical<'tcx, '_>,
         mono_instance: &Instance<'tcx>,
     ) -> (String, Vec<DepEdge>) {
         let tcx = canonical.tcx();
 
         let is_lang_item = self.lang_items.contains(&mono_instance.def_id()) || {
             if let Some(hir_id) = tcx.hir().as_local_hir_id(mono_instance.def_id()) {
-                let parent_did = tcx.hir().get_parent_did_by_hir_id(hir_id);
+                let parent_did = tcx.hir().get_parent_did(hir_id);
                 self.lang_items.contains(&parent_did)
             } else {
                 // Not sure if the default case is correct. If we encounter something
@@ -187,7 +188,7 @@ impl TaurusExtractor {
         )
     }
 
-    fn audit_analyze<'tcx>(&mut self, compiler: &interface::Compiler, tcx: TyCtxt<'_, 'tcx, 'tcx>) {
+    fn audit_analyze<'tcx>(&mut self, compiler: &interface::Compiler, tcx: TyCtxt<'tcx>) {
         let db_path = self.output_dir.join("taurus.depstore");
         info!(
             "storing results of compile unit {} at {}",
@@ -208,7 +209,7 @@ impl TaurusExtractor {
         let canonical = Canonical::new(&tcx, compiler.source_map().clone());
 
         for (hir_id, mark) in funcs_to_audit {
-            let def_id = hir_map.local_def_id_from_hir_id(hir_id);
+            let def_id = hir_map.local_def_id(hir_id);
             let name = canonical.def_name(def_id);
             let span = tcx.def_span(def_id);
             let src_loc = canonical.source_map().lookup_char_pos(span.lo());

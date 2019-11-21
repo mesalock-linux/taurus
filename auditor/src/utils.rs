@@ -10,7 +10,7 @@ use rustc::hir::map::DefPathData;
 use rustc::ty::subst::UnpackedKind;
 use rustc::ty::{Ty, TyCtxt, TyKind};
 
-pub fn append_mangled_type<'tcx>(str: &mut String, ty: Ty<'tcx>, tcx: &TyCtxt<'_, '_, 'tcx>) {
+pub fn append_mangled_type<'tcx>(str: &mut String, ty: Ty<'tcx>, tcx: &TyCtxt<'tcx>) {
     use syntax::ast;
     use TyKind::*;
     match ty.sty {
@@ -134,13 +134,16 @@ pub fn append_mangled_type<'tcx>(str: &mut String, ty: Ty<'tcx>, tcx: &TyCtxt<'_
             str.push_str("_as_");
             str.push_str(qualified_type_name(tcx, projection_ty.item_def_id).as_str());
         }
+        Never => {
+            str.push('!');
+        }
         _ => {
             panic!("case not handled: {:?}", ty);
         }
     }
 }
 
-pub fn qualified_type_name(tcx: &TyCtxt<'_, '_, '_>, def_id: DefId) -> String {
+pub fn qualified_type_name(tcx: &TyCtxt<'_>, def_id: DefId) -> String {
     let mut name = if def_id.is_local() {
         tcx.crate_name.as_interned_str().as_str().to_string()
     } else {

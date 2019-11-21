@@ -6,8 +6,8 @@ edition = "2018"
 
 [features]
 default = ["use_sled"]
-use_sled = []
-use_sqlite = []
+use_sled = ["sled"]
+use_sqlite = ["rusqlite"]
 
 [lib]
 test = false
@@ -19,8 +19,8 @@ path = "src/main.rs"
 
 [dependencies]
 log = "*"
-sled = { version = "*", feature = ["use_sled"] }
-rusqlite = { version = "*", feature = ["use_sqlite"] }
+sled = { version = "*", optional = true }
+rusqlite = { version = "*", optional = true }
 env_logger = "*"
 fs2 = "*"
 serde = "*"
