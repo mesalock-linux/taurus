@@ -106,7 +106,7 @@ impl TaurusAnalyzer {
                 if let Some(MarkedItem {
                     mark: Marking::EntryPoint,
                     ..
-                }) = &self.marking_db.get(&key)
+                }) = &self.marking_db.get(without_type_param(&key))
                 {
                     true
                 } else {

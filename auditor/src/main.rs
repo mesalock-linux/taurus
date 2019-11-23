@@ -61,7 +61,15 @@ fn main() {
         // We are in analysis mode
         let db_path = Path::new("target/debug/deps/taurus.depstore");
         let analyzer = analyzer::TaurusAnalyzer::new(&db_path);
-        println!("{}", analyzer.get_depgraph_dot());
+        // println!("{}", analyzer.get_depgraph_dot());
+        let report = analyzer.audit();
+        for to_warn in report.unaudited {
+            println!("unaudited: {} at {}", to_warn.0, to_warn.1);
+        }
+        for to_inform in report.audited {
+            println!("audited: {} by {} at {}", to_inform.0, to_inform.1, to_inform.2);
+        }
+
     }
     return;
 }

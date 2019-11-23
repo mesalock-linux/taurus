@@ -81,7 +81,7 @@ pub fn extract_functions_to_audit(
             match &item.node {
                 ItemKind::Fn(_, _, _, body_id) => {
                     funcs.insert(
-                        body_id.hir_id,
+                        hir_map.body_owner(*body_id),
                         Marking::RequireAudit(extract_meta_value(attr)),
                     );
                 }
@@ -136,7 +136,7 @@ pub fn extract_functions_to_audit(
         if let Some(_) = syntax::attr::find_by_name(&item.attrs, taurus_annotations.entry_point) {
             if let ItemKind::Fn(_, _, generics, body_id) = &item.node {
                 if generics.params.len() == 0 {
-                    funcs.insert(body_id.hir_id, Marking::EntryPoint);
+                    funcs.insert(hir_map.body_owner(*body_id), Marking::EntryPoint);
                     continue;
                 }
             }
@@ -173,5 +173,5 @@ pub fn extract_functions_to_audit(
         }
     }
 
-    return funcs;
+    funcs
 }

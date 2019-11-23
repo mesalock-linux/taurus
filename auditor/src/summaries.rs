@@ -75,6 +75,12 @@ pub struct SourceLocation {
     pub line_no: usize,
 }
 
+impl std::fmt::Display for SourceLocation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}:{}", self.file, self.line_no)
+    }
+}
+
 #[derive(PartialEq, Eq, Clone, Serialize, Deserialize, Debug)]
 pub enum Marking {
     RequireAudit(String),

@@ -15,4 +15,6 @@ use syntax::feature_gate::AttributeType::Whitelisted;
 pub fn plugin_registrar(reg: &mut Registry) {
     let symbols = Symbols::new();
     reg.register_attribute(symbols.require_audit, Whitelisted);
+    reg.register_attribute(symbols.audited, Whitelisted);
+    reg.register_attribute(symbols.entry_point, Whitelisted);
 }
