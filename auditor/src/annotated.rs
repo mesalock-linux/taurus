@@ -148,7 +148,7 @@ pub fn extract_functions_to_audit(
         }
     }
 
-    // Propogate require_audit annotations to items associated with marked ADTs
+    // Propogate require_audit annotations to trait impls associated with marked ADTs
     for (_, trait_impls) in &hir_map.krate().trait_impls {
         for trait_impl in trait_impls {
             let impl_def_id = hir_map.local_def_id(*trait_impl);
@@ -170,6 +170,31 @@ pub fn extract_functions_to_audit(
                     }
                 }
             }
+        }
+    }
+
+    // Propogate require_audit annotations to impl items associated with marked ADTs
+    for (id, impl_item) in &hir_map.krate().impl_items {
+        let parent_hir_id = hir_map.get_parent_item(id.hir_id);
+        let node = hir_map.get(parent_hir_id);
+
+        match node {
+            Node::Item(item) => {
+                if let ItemKind::Impl(_, ImplPolarity::Positive, _, _, _, _, _) = &item.node {
+                    let parent_did = hir_map.local_def_id(parent_hir_id);
+                    let ty = tcx.type_of(parent_did);
+
+                    // If the type cannot be simplified, it's likely a generic. We do not audit impls for pure
+                    // generics since they are not specific to types we care about. 
+                    if let Some(simplified_self_ty) = fast_reject::simplify_type(*tcx, ty, false) {
+                        if let Some(marking) =  marked_adts.get(&simplified_self_ty) {
+                            funcs.insert(id.hir_id, marking.clone());
+                            debug!("item to audit {}", hir_map.hir_to_pretty_string(id.hir_id));
+                        }
+                    }
+                }
+            }
+            _ => panic!("expecting item"),
         }
     }
 
