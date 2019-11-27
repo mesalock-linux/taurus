@@ -19,7 +19,21 @@ fn extract_meta_value(attr: &Attribute) -> String {
         .to_string()
 }
 
-pub fn extract_functions_to_audit(
+fn record_marking(result: &mut HashMap<HirId, Marking>, hir_id: HirId, marking: Marking) {
+    if let Some(stored_marking) = result.get_mut(&hir_id) {
+        if let Some(meta) = marking.require_audit {
+            stored_marking.require_audit = Some(meta);
+        }
+        if let Some(meta) = marking.audited {
+            stored_marking.audited = Some(meta);
+        }
+        stored_marking.is_entry_point = marking.is_entry_point || stored_marking.is_entry_point;
+    } else {
+        result.insert(hir_id, marking);
+    }
+}
+
+pub fn extract_annotated_functions(
     taurus_annotations: &taurus_attributes::Symbols,
     tcx: &TyCtxt<'_>,
 ) -> HashMap<HirId, Marking> {
@@ -27,72 +41,99 @@ pub fn extract_functions_to_audit(
     let hir_map = tcx.hir();
 
     for (_, item) in &hir_map.krate().trait_items {
-        let mark = &taurus_annotations.require_audit;
-        if let Some(attr) = syntax::attr::find_by_name(&item.attrs, *mark) {
-            if let TraitItemKind::Method(..) = item.node {
-                funcs.insert(item.hir_id, Marking::RequireAudit(extract_meta_value(attr)));
-            } else {
-                panic!("#[{}] can only annotate methods, functions, and ADTs", mark);
-            }
+        let annotation = &taurus_annotations.entry_point;
+        if let Some(_) = syntax::attr::find_by_name(&item.attrs, *annotation) {
+            panic!("#[{}] can only annotate functions", annotation);
         }
-        let mark = &taurus_annotations.audited;
-        if let Some(attr) = syntax::attr::find_by_name(&item.attrs, *mark) {
-            if let TraitItemKind::Method(..) = item.node {
-                funcs.insert(item.hir_id, Marking::Audited(extract_meta_value(attr)));
-            } else {
-                panic!("#[{}] can only annotate methods, functions", mark);
-            }
+
+        let mut marking = Marking {
+            require_audit: None,
+            audited: None,
+            is_entry_point: false,
+        };
+        if let Some(attr) =
+            syntax::attr::find_by_name(&item.attrs, taurus_annotations.require_audit)
+        {
+            marking.require_audit = Some(extract_meta_value(attr));
         }
-        let mark = &taurus_annotations.entry_point;
-        if let Some(_) = syntax::attr::find_by_name(&item.attrs, *mark) {
-            panic!("#[{}] can only annotate functions", mark);
+
+        if let Some(attr) = syntax::attr::find_by_name(&item.attrs, taurus_annotations.audited) {
+            marking.audited = Some(extract_meta_value(attr));
+        }
+
+        if marking.annotated() {
+            if let TraitItemKind::Method(..) = item.node {
+                record_marking(&mut funcs, item.hir_id, marking);
+            } else {
+                panic!(
+                    "#[{}] and #[{}] can only annotate methods, functions, and ADTs",
+                    taurus_annotations.require_audit, taurus_annotations.audited,
+                );
+            }
         }
     }
 
     for (_, item) in &hir_map.krate().impl_items {
-        let mark = &taurus_annotations.require_audit;
-        if let Some(attr) = syntax::attr::find_by_name(&item.attrs, *mark) {
-            if let ImplItemKind::Method(..) = item.node {
-                funcs.insert(item.hir_id, Marking::RequireAudit(extract_meta_value(attr)));
-            } else {
-                panic!("{} annotation can only mark methods", mark);
-            }
+        let annotation = &taurus_annotations.entry_point;
+        if let Some(_) = syntax::attr::find_by_name(&item.attrs, *annotation) {
+            panic!("#[{}] can only annotate functions", annotation);
         }
-        let mark = &taurus_annotations.audited;
-        if let Some(attr) = syntax::attr::find_by_name(&item.attrs, *mark) {
-            if let ImplItemKind::Method(..) = item.node {
-                funcs.insert(item.hir_id, Marking::Audited(extract_meta_value(attr)));
-            } else {
-                panic!("{} annotation can only mark methods", mark);
-            }
+
+        let mut marking = Marking::default();
+        if let Some(attr) =
+            syntax::attr::find_by_name(&item.attrs, taurus_annotations.require_audit)
+        {
+            marking.require_audit = Some(extract_meta_value(attr));
         }
-        let mark = &taurus_annotations.entry_point;
-        if let Some(_) = syntax::attr::find_by_name(&item.attrs, *mark) {
-            panic!("{} annotation can only mark functions", mark);
+
+        if let Some(attr) = syntax::attr::find_by_name(&item.attrs, taurus_annotations.audited) {
+            marking.audited = Some(extract_meta_value(attr));
+        }
+
+        if marking.annotated() {
+            if let ImplItemKind::Method(..) = item.node {
+                record_marking(&mut funcs, item.hir_id, marking);
+            } else {
+                panic!(
+                    "#[{}] and #[{}] can only annotate methods, functions, and ADTs",
+                    taurus_annotations.require_audit, taurus_annotations.audited,
+                );
+            }
         }
     }
 
     let mut marked_adts: HashMap<fast_reject::SimplifiedType, Marking> = HashMap::new();
 
     for (_, item) in &hir_map.krate().items {
+        let mut marking = Marking::default();
+
         if let Some(attr) =
             syntax::attr::find_by_name(&item.attrs, taurus_annotations.require_audit)
         {
+            marking.require_audit = Some(extract_meta_value(attr));
+        }
+
+        if let Some(attr) = syntax::attr::find_by_name(&item.attrs, taurus_annotations.audited) {
+            marking.audited = Some(extract_meta_value(attr));
+        }
+
+        if marking.annotated() {
             match &item.node {
                 ItemKind::Fn(_, _, _, body_id) => {
-                    funcs.insert(
-                        hir_map.body_owner(*body_id),
-                        Marking::RequireAudit(extract_meta_value(attr)),
-                    );
+                    record_marking(&mut funcs, hir_map.body_owner(*body_id), marking);
                 }
                 ItemKind::Enum(..) | ItemKind::Struct(..) | ItemKind::Union(..) => {
                     let def_id = hir_map.local_def_id(item.hir_id);
                     let ty = tcx.type_of(def_id);
                     if let Some(simplified_self_ty) = fast_reject::simplify_type(*tcx, ty, false) {
-                        marked_adts.insert(
-                            simplified_self_ty,
-                            Marking::RequireAudit(extract_meta_value(attr)),
-                        );
+                        if marking.require_audit.is_some() {
+                            marked_adts.insert(simplified_self_ty, marking);
+                        } else {
+                            panic!(
+                                "#[{}] can only annotate functions and methods",
+                                taurus_annotations.audited,
+                            );
+                        }
                     } else {
                         panic!("marked ADT cannot be simplified");
                     }
@@ -105,10 +146,7 @@ pub fn extract_functions_to_audit(
                     for trait_item in trait_items {
                         if let AssocItemKind::Method { .. } = trait_item.kind {
                             if trait_item.defaultness.has_value() {
-                                funcs.insert(
-                                    trait_item.id.hir_id,
-                                    Marking::RequireAudit(extract_meta_value(attr)),
-                                );
+                                record_marking(&mut funcs, trait_item.id.hir_id, marking.clone());
                             }
                         }
                     }
@@ -116,16 +154,13 @@ pub fn extract_functions_to_audit(
                 ItemKind::Impl(_, ImplPolarity::Positive, _, _, _, _, impl_items) => {
                     for impl_item in impl_items {
                         if let AssocItemKind::Method { .. } = impl_item.kind {
-                            funcs.insert(
-                                impl_item.id.hir_id,
-                                Marking::RequireAudit(extract_meta_value(attr)),
-                            );
+                            record_marking(&mut funcs, impl_item.id.hir_id, marking.clone());
                         }
                     }
                 }
                 _ => panic!(
-                    "#[{}] can only annotate functions and methods",
-                    taurus_annotations.require_audit,
+                    "#[{}] and #[{}] can only annotate functions, methods, and ADTs",
+                    taurus_annotations.require_audit, taurus_annotations.audited,
                 ),
             }
         }
@@ -136,7 +171,11 @@ pub fn extract_functions_to_audit(
         if let Some(_) = syntax::attr::find_by_name(&item.attrs, taurus_annotations.entry_point) {
             if let ItemKind::Fn(_, _, generics, body_id) = &item.node {
                 if generics.params.len() == 0 {
-                    funcs.insert(hir_map.body_owner(*body_id), Marking::EntryPoint);
+                    record_marking(
+                        &mut funcs,
+                        hir_map.body_owner(*body_id),
+                        Marking::entry_point(),
+                    );
                     continue;
                 }
             }
@@ -148,33 +187,8 @@ pub fn extract_functions_to_audit(
         }
     }
 
-    // Propogate require_audit annotations to trait impls associated with marked ADTs
-    for (_, trait_impls) in &hir_map.krate().trait_impls {
-        for trait_impl in trait_impls {
-            let impl_def_id = hir_map.local_def_id(*trait_impl);
-            if let Some(Node::Item(item)) = hir_map.find(*trait_impl) {
-                if let ItemKind::Impl(_, ImplPolarity::Positive, _, _, _, _, impl_items) =
-                    &item.node
-                {
-                    let self_ty = tcx.type_of(impl_def_id);
-                    if let Some(simplified_self_ty) =
-                        fast_reject::simplify_type(*tcx, &self_ty, false)
-                    {
-                        if let Some(adt_marking) = marked_adts.get(&simplified_self_ty) {
-                            for impl_item in impl_items {
-                                if let AssocItemKind::Method { .. } = impl_item.kind {
-                                    funcs.insert(impl_item.id.hir_id, adt_marking.clone());
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
     // Propogate require_audit annotations to impl items associated with marked ADTs
-    for (id, impl_item) in &hir_map.krate().impl_items {
+    for (id, _) in &hir_map.krate().impl_items {
         let parent_hir_id = hir_map.get_parent_item(id.hir_id);
         let node = hir_map.get(parent_hir_id);
 
@@ -185,11 +199,10 @@ pub fn extract_functions_to_audit(
                     let ty = tcx.type_of(parent_did);
 
                     // If the type cannot be simplified, it's likely a generic. We do not audit impls for pure
-                    // generics since they are not specific to types we care about. 
+                    // generics since they are not specific to types we care about.
                     if let Some(simplified_self_ty) = fast_reject::simplify_type(*tcx, ty, false) {
-                        if let Some(marking) =  marked_adts.get(&simplified_self_ty) {
-                            funcs.insert(id.hir_id, marking.clone());
-                            debug!("item to audit {}", hir_map.hir_to_pretty_string(id.hir_id));
+                        if let Some(marking) = marked_adts.get(&simplified_self_ty) {
+                            record_marking(&mut funcs, id.hir_id, marking.clone());
                         }
                     }
                 }

@@ -3,7 +3,7 @@ extern crate seahash;
 use rustc::hir::def_id::DefId;
 use rustc::mir::mono::MonoItem;
 use rustc::mir::visit::Visitor;
-use rustc::mir::{Location, Body, Operand, Terminator, TerminatorKind};
+use rustc::mir::{Body, Location, Operand, Terminator, TerminatorKind};
 use rustc::ty::{Instance, InstanceDef, TyCtxt, TyKind};
 use rustc_interface::interface;
 use rustc_mir::monomorphize::collector::{collect_crate_mono_items, MonoItemCollectionMode};
@@ -17,6 +17,8 @@ use crate::summaries::*;
 struct MirScanner<'a, 'tcx: 'a> {
     pub canonical: &'a Canonical<'tcx, 'a>,
     pub result: Vec<DepEdge>,
+    pub def_id: DefId,
+    pub is_local: bool,
     pub body: &'a Body<'tcx>,
     pub is_lang_item: bool,
 }
@@ -50,19 +52,43 @@ impl<'a, 'tcx: 'a> Visitor<'tcx> for MirScanner<'a, 'tcx> {
         if let TyKind::FnDef(callee_def_id, substs) =
             operand.ty(self.body, *self.canonical.tcx()).sty
         {
+            let mut def_id = callee_def_id;
+            let mut generic_args = substs;
+
+            if !self.canonical.tcx().is_mir_available(def_id) {
+                // We can only resolve trait functions for local crates. rustc may
+                // crash if certain information is missing in the meta data of an
+                // extern crate. There is no way for us to tell.
+                if self.is_local {
+                    let param_env = self.canonical.tcx().param_env(self.def_id);
+                    if let Some(instance) =
+                        Instance::resolve(*self.canonical.tcx(), param_env, def_id, generic_args)
+                    {
+                        def_id = instance.def.def_id();
+                        generic_args = instance.substs;
+                    }
+                } else {
+                    trace!(
+                        "unresolved edge {} -> {}",
+                        self.canonical.def_name(self.def_id),
+                        self.canonical.def_name(def_id)
+                    );
+                }
+            }
+
             let loc = self
                 .canonical
                 .source_map()
                 .lookup_char_pos(self.body.source_info(mir_loc).span.lo());
 
-            let type_params: Vec<String> = substs
+            let type_params: Vec<String> = generic_args
                 .types()
                 .into_iter()
                 .map(|ty| self.canonical.normalized_type_name(ty))
                 .collect();
 
             let val = DepEdge {
-                callee_def: self.canonical.def_name(callee_def_id),
+                callee_def: self.canonical.def_name(def_id),
                 is_lang_item: self.is_lang_item,
                 type_params,
                 src_loc: (&loc).into(),
@@ -77,13 +103,17 @@ impl<'a, 'tcx: 'a> Visitor<'tcx> for MirScanner<'a, 'tcx> {
 
 impl<'a, 'tcx: 'a> MirScanner<'a, 'tcx> {
     pub fn scan(
+        def_id: DefId,
         mir_body: &'a Body<'tcx>,
         canonical: &'a Canonical<'tcx, 'a>,
         is_lang_item: bool,
     ) -> Vec<DepEdge> {
+        let is_local = canonical.tcx().hir().as_local_hir_id(def_id).is_some();
         let mut mir_scanner = MirScanner {
             canonical,
             result: Vec::new(),
+            def_id,
+            is_local,
             body: &mir_body,
             is_lang_item,
         };
@@ -172,15 +202,17 @@ impl TaurusExtractor {
                 let parent_did = tcx.hir().get_parent_did(hir_id);
                 self.lang_items.contains(&parent_did)
             } else {
-                // Not sure if the default case is correct. If we encounter something
-                // that is non-local, there is something wrong. But should we just
-                // assume it is related to built-in language items?
-                true
+                // By far, we know that (in the case of MesaTEE) some lang items and
+                // things in std are non-local. It's hard to further distinguish the two
+                // cases. So we just assume they should not be regarded as lang items
+                false
             }
         };
 
+        let def_id = mono_instance.def.def_id();
         let mir = tcx.instance_mir(mono_instance.def);
-        let call_edges = MirScanner::scan(mir, canonical, is_lang_item);
+
+        let call_edges = MirScanner::scan(def_id, mir, canonical, is_lang_item);
 
         (
             canonical.monoitem_name(mono_instance.def.def_id(), mono_instance.substs),
@@ -204,11 +236,11 @@ impl TaurusExtractor {
                 .expect("failed to access consistent storage");
 
         let hir_map = tcx.hir();
-        let funcs_to_audit = extract_functions_to_audit(&taurus_attributes::Symbols::new(), &tcx);
+        let annotated_funcs = extract_annotated_functions(&taurus_attributes::Symbols::new(), &tcx);
 
         let canonical = Canonical::new(&tcx, compiler.source_map().clone());
 
-        for (hir_id, mark) in funcs_to_audit {
+        for (hir_id, marking) in annotated_funcs {
             let def_id = hir_map.local_def_id(hir_id);
             let name = canonical.def_name(def_id);
             let span = tcx.def_span(def_id);
@@ -217,7 +249,7 @@ impl TaurusExtractor {
             marking_db.insert(
                 name,
                 MarkedItem {
-                    mark,
+                    marking,
                     src_loc: (&src_loc).into(),
                 },
             );

@@ -82,15 +82,39 @@ impl std::fmt::Display for SourceLocation {
 }
 
 #[derive(PartialEq, Eq, Clone, Serialize, Deserialize, Debug)]
-pub enum Marking {
-    RequireAudit(String),
-    Audited(String),
-    EntryPoint,
+pub struct Marking {
+    pub require_audit: Option<String>,
+    pub audited: Option<String>,
+    pub is_entry_point: bool,
+}
+
+impl Default for Marking {
+    fn default() -> Self {
+        Marking {
+            require_audit: None,
+            audited: None,
+            is_entry_point: false,
+        }
+    }
+}
+
+impl Marking {
+    pub fn entry_point() -> Self {
+        Marking {
+            require_audit: None,
+            audited: None,
+            is_entry_point: true,
+        }
+    }
+
+    pub fn annotated(&self) -> bool {
+        self.is_entry_point || self.require_audit.is_some() || self.audited.is_some()
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct MarkedItem {
-    pub mark: Marking,
+    pub marking: Marking,
     pub src_loc: SourceLocation,
 }
 

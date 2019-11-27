@@ -99,21 +99,24 @@ impl TaurusAnalyzer {
             ret.remove_node(node);
         }
 
-        let entry_points = ret
+        let entry_points: HashSet<NodeIndex> = ret
             .node_indices()
             .filter(|&node_idx| {
                 let key = &ret.node_weight(node_idx).unwrap();
-                if let Some(MarkedItem {
-                    mark: Marking::EntryPoint,
-                    ..
-                }) = &self.marking_db.get(without_type_param(&key))
-                {
-                    true
-                } else {
-                    false
-                }
+                self.marking_db
+                    .get(without_type_param(&key))
+                    .and_then(|marked_item| {
+                        if marked_item.marking.is_entry_point {
+                            Some(())
+                        } else {
+                            None
+                        }
+                    })
+                    .is_some()
             })
             .collect();
+
+        debug!("found {} entry points", entry_points.len());
 
         (ret, entry_points)
     }
@@ -130,6 +133,10 @@ impl TaurusAnalyzer {
         let mut visited = HashSet::new();
 
         for entry in entry_points {
+            debug!(
+                "start traversal from entry point {}",
+                dg.node_weight(entry).unwrap()
+            );
             for edge in dg.edges(entry) {
                 if !visited.contains(&edge.id()) {
                     visited.insert(edge.id());
@@ -159,37 +166,32 @@ impl TaurusAnalyzer {
 
             let parent_name = dg.node_weight(parent).unwrap();
             let dependent_name = dg.node_weight(dependent).unwrap();
+
             let original_auditor =
-                if let Some(marked_item) = marking_db.get(without_type_param(parent_name)) {
-                    match &marked_item.mark {
-                        Marking::Audited(meta) => {
-                            Some((meta.to_string(), auditor.insert(meta.to_string(), parent)))
-                        }
-                        _ => None,
-                    }
-                } else {
-                    None
-                };
+                marking_db
+                    .get(without_type_param(parent_name))
+                    .and_then(|marked_item| {
+                        marked_item.marking.audited.map(|meta| {
+                            (meta.to_string(), auditor.insert(meta.to_string(), parent))
+                        })
+                    });
 
             let mut skip_children = false;
 
             if let Some(marked_item) = marking_db.get(without_type_param(dependent_name)) {
-                match &marked_item.mark {
-                    Marking::RequireAudit(meta) => {
-                        if let Some(&auditor_idx) = auditor.get(meta) {
-                            report.audited.push((
-                                dg.node_weight(auditor_idx).unwrap().to_string(),
-                                dependent_name.to_string(),
-                                dep_edge.clone(),
-                            ));
-                        } else {
-                            report
-                                .unaudited
-                                .push((dependent_name.to_string(), dep_edge.clone()));
-                            skip_children = true;
-                        }
+                if let Some(meta) = &marked_item.marking.require_audit {
+                    if let Some(&auditor_idx) = auditor.get(meta) {
+                        report.audited.push((
+                            dg.node_weight(auditor_idx).unwrap().to_string(),
+                            dependent_name.to_string(),
+                            dep_edge.clone(),
+                        ));
+                    } else {
+                        report
+                            .unaudited
+                            .push((dependent_name.to_string(), dep_edge.clone()));
+                        skip_children = true;
                     }
-                    _ => (),
                 }
             }
 
