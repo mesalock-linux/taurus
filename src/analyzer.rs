@@ -11,9 +11,46 @@ use petgraph::Direction;
 
 use crate::summaries::*;
 
+pub type DepGraph = StableDiGraph<String, SourceLocation>;
+
+pub type ProgPoint = (String, SourceLocation);
+
+pub struct DepPath {
+    path: Vec<ProgPoint>,
+}
+
+impl DepPath {
+    fn instantiate<'a>(
+        abstract_path: &[EdgeReference<'a, SourceLocation>],
+        dg: &'a DepGraph,
+    ) -> Self {
+        DepPath {
+            path: abstract_path
+                .iter()
+                .map(|seg| {
+                    let dependent = seg.target();
+                    let dependent_name = dg.node_weight(dependent).unwrap();
+
+                    (dependent_name.to_string(), seg.weight().clone())
+                })
+                .collect(),
+        }
+    }
+}
+
+impl std::fmt::Display for DepPath {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        for pp in &self.path {
+            write!(f, "-> {} at {}\n", pp.0, pp.1)?;
+        }
+
+        Ok(())
+    }
+}
+
 pub struct AuditReport {
-    pub audited: Vec<(String, String, SourceLocation)>,
-    pub unaudited: Vec<(String, SourceLocation)>,
+    pub audited: Vec<(String, DepPath)>,
+    pub unaudited: Vec<DepPath>,
 }
 
 fn without_type_param<'a>(mono_name: &'a str) -> &'a str {
@@ -24,8 +61,6 @@ pub struct TaurusAnalyzer {
     marking_db: PersistentSummaryStore<MarkedItem>,
     calledge_db: PersistentSummaryStore<Vec<DepEdge>>,
 }
-
-pub type DepGraph = StableDiGraph<String, SourceLocation>;
 
 impl TaurusAnalyzer {
     pub fn new(db_path: &Path) -> Self {
@@ -130,25 +165,25 @@ impl TaurusAnalyzer {
         let (dg, entry_points) = self.get_depgraph();
 
         let mut auditor = HashMap::new();
-        let mut visited = HashSet::new();
 
         for entry in entry_points {
             debug!(
                 "start traversal from entry point {}",
                 dg.node_weight(entry).unwrap()
             );
+
+            let mut visited = HashSet::new();
             for edge in dg.edges(entry) {
-                if !visited.contains(&edge.id()) {
-                    visited.insert(edge.id());
-                    traverse(
-                        &dg,
-                        &self.marking_db,
-                        edge,
-                        &mut auditor,
-                        &mut visited,
-                        &mut report,
-                    );
-                }
+                let mut path = vec![edge];
+                traverse(
+                    &dg,
+                    &self.marking_db,
+                    edge,
+                    &mut auditor,
+                    &mut path,
+                    &mut visited,
+                    &mut report,
+                );
             }
         }
 
@@ -157,10 +192,10 @@ impl TaurusAnalyzer {
             marking_db: &PersistentSummaryStore<MarkedItem>,
             current: EdgeReference<'a, SourceLocation>,
             auditor: &mut HashMap<String, NodeIndex>,
+            path: &mut Vec<EdgeReference<'a, SourceLocation>>,
             visited: &mut HashSet<EdgeIndex>,
             report: &mut AuditReport,
         ) {
-            let dep_edge = current.weight();
             let parent = current.source();
             let dependent = current.target();
 
@@ -180,16 +215,13 @@ impl TaurusAnalyzer {
 
             if let Some(marked_item) = marking_db.get(without_type_param(dependent_name)) {
                 if let Some(meta) = &marked_item.marking.require_audit {
+                    let dep_path = DepPath::instantiate(&path, dg);
                     if let Some(&auditor_idx) = auditor.get(meta) {
-                        report.audited.push((
-                            dg.node_weight(auditor_idx).unwrap().to_string(),
-                            dependent_name.to_string(),
-                            dep_edge.clone(),
-                        ));
-                    } else {
                         report
-                            .unaudited
-                            .push((dependent_name.to_string(), dep_edge.clone()));
+                            .audited
+                            .push((dg.node_weight(auditor_idx).unwrap().to_string(), dep_path));
+                    } else {
+                        report.unaudited.push(dep_path);
                         skip_children = true;
                     }
                 }
@@ -199,7 +231,9 @@ impl TaurusAnalyzer {
                 for edge in dg.edges(dependent) {
                     if !visited.contains(&edge.id()) {
                         visited.insert(edge.id());
-                        traverse(dg, marking_db, edge, auditor, visited, report);
+                        path.push(edge);
+                        traverse(dg, marking_db, edge, auditor, path, visited, report);
+                        path.pop();
                     }
                 }
             }

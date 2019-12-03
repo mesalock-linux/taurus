@@ -7,13 +7,13 @@
 
 use rustc::hir::def_id::DefId;
 use rustc::hir::map::DefPathData;
-use rustc::ty::subst::UnpackedKind;
+use rustc::ty::subst::GenericArgKind;
 use rustc::ty::{Ty, TyCtxt, TyKind};
 
 pub fn append_mangled_type<'tcx>(str: &mut String, ty: Ty<'tcx>, tcx: &TyCtxt<'tcx>) {
     use syntax::ast;
     use TyKind::*;
-    match ty.sty {
+    match ty.kind {
         Bool => str.push_str("bool"),
         Char => str.push_str("char"),
         Int(int_ty) => {
@@ -45,7 +45,7 @@ pub fn append_mangled_type<'tcx>(str: &mut String, ty: Ty<'tcx>, tcx: &TyCtxt<'t
         Adt(def, subs) => {
             str.push_str(qualified_type_name(tcx, def.did).as_str());
             for sub in subs {
-                if let UnpackedKind::Type(ty) = sub.unpack() {
+                if let GenericArgKind::Type(ty) = sub.unpack() {
                     str.push('_');
                     append_mangled_type(str, ty, tcx);
                 }
@@ -54,8 +54,8 @@ pub fn append_mangled_type<'tcx>(str: &mut String, ty: Ty<'tcx>, tcx: &TyCtxt<'t
         Closure(def_id, subs) => {
             str.push_str("closure_");
             str.push_str(qualified_type_name(tcx, def_id).as_str());
-            for sub in subs.substs {
-                if let UnpackedKind::Type(ty) = sub.unpack() {
+            for sub in subs {
+                if let GenericArgKind::Type(ty) = sub.unpack() {
                     str.push('_');
                     append_mangled_type(str, ty, tcx);
                 }
@@ -70,7 +70,7 @@ pub fn append_mangled_type<'tcx>(str: &mut String, ty: Ty<'tcx>, tcx: &TyCtxt<'t
             str.push_str("fn_");
             str.push_str(qualified_type_name(tcx, def_id).as_str());
             for sub in subs {
-                if let UnpackedKind::Type(ty) = sub.unpack() {
+                if let GenericArgKind::Type(ty) = sub.unpack() {
                     str.push('_');
                     append_mangled_type(str, ty, tcx);
                 }
@@ -80,7 +80,7 @@ pub fn append_mangled_type<'tcx>(str: &mut String, ty: Ty<'tcx>, tcx: &TyCtxt<'t
             str.push_str("impl_");
             str.push_str(qualified_type_name(tcx, def_id).as_str());
             for sub in subs {
-                if let UnpackedKind::Type(ty) = sub.unpack() {
+                if let GenericArgKind::Type(ty) = sub.unpack() {
                     str.push('_');
                     append_mangled_type(str, ty, tcx);
                 }
@@ -144,15 +144,7 @@ pub fn append_mangled_type<'tcx>(str: &mut String, ty: Ty<'tcx>, tcx: &TyCtxt<'t
 }
 
 pub fn qualified_type_name(tcx: &TyCtxt<'_>, def_id: DefId) -> String {
-    let mut name = if def_id.is_local() {
-        tcx.crate_name.as_interned_str().as_str().to_string()
-    } else {
-        let cdata = tcx.crate_data_as_rc_any(def_id.krate);
-        let cdata = cdata
-            .downcast_ref::<rustc_metadata::cstore::CrateMetadata>()
-            .unwrap();
-        cdata.name.as_str().to_string()
-    };
+    let mut name = tcx.crate_name(def_id.krate).to_string();
     for component in &tcx.def_path(def_id).data {
         name.push_str("::");
         push_component_name(&component.data, &mut name);
@@ -166,19 +158,17 @@ pub fn qualified_type_name(tcx: &TyCtxt<'_>, def_id: DefId) -> String {
 
 fn push_component_name(component_data: &DefPathData, target: &mut String) {
     use DefPathData::*;
+
     match component_data {
-        TypeNs(name) | ValueNs(name) | MacroNs(name) | LifetimeNs(name) | GlobalMetaData(name) => {
-            target.push_str(name.as_str().get());
+        TypeNs(name) | ValueNs(name) | MacroNs(name) | LifetimeNs(name) => {
+            target.push_str(&*name.as_str())
         }
-        _ => target.push_str(match component_data {
-            CrateRoot => "crate_root",
-            Impl => "impl",
-            Misc => "misc",
-            ClosureExpr => "closure",
-            Ctor => "ctor",
-            AnonConst => "const",
-            ImplTrait => "impl_trait",
-            _ => unreachable!(),
-        }),
-    };
+        CrateRoot => target.push_str("crate_root"),
+        Impl => target.push_str("impl"),
+        Misc => target.push_str("misc"),
+        ClosureExpr => target.push_str("closure"),
+        Ctor => target.push_str("ctor"),
+        AnonConst => target.push_str("const"),
+        ImplTrait => target.push_str("impl_trait"),
+    }
 }

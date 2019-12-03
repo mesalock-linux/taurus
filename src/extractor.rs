@@ -26,7 +26,7 @@ struct MirScanner<'a, 'tcx: 'a> {
 impl<'a, 'tcx: 'a> Visitor<'tcx> for MirScanner<'a, 'tcx> {
     fn visit_terminator(&mut self, term: &Terminator<'tcx>, mir_loc: Location) {
         if let TerminatorKind::Call { func, .. } = &term.kind {
-            if let TyKind::FnPtr(..) = func.ty(self.body, *self.canonical.tcx()).sty {
+            if let TyKind::FnPtr(..) = func.ty(self.body, *self.canonical.tcx()).kind {
                 let loc = self
                     .canonical
                     .source_map()
@@ -50,7 +50,7 @@ impl<'a, 'tcx: 'a> Visitor<'tcx> for MirScanner<'a, 'tcx> {
 
     fn visit_operand(&mut self, operand: &Operand<'tcx>, mir_loc: Location) {
         if let TyKind::FnDef(callee_def_id, substs) =
-            operand.ty(self.body, *self.canonical.tcx()).sty
+            operand.ty(self.body, *self.canonical.tcx()).kind
         {
             let mut def_id = callee_def_id;
             let mut generic_args = substs;
@@ -236,7 +236,7 @@ impl TaurusExtractor {
                 .expect("failed to access consistent storage");
 
         let hir_map = tcx.hir();
-        let annotated_funcs = extract_annotated_functions(&taurus_attributes::Symbols::new(), &tcx);
+        let annotated_funcs = extract_annotated_functions(&tcx);
 
         let canonical = Canonical::new(&tcx, compiler.source_map().clone());
 

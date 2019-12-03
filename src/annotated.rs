@@ -1,13 +1,44 @@
 use rustc::hir::*;
 use rustc::ty::fast_reject;
 use rustc::ty::TyCtxt;
-use syntax::ast::Attribute;
+use syntax::ast::{AttrKind, Attribute};
 
 use std::collections::HashMap;
 
 use crate::summaries::Marking;
 
-#[inline]
+struct TaurusAttr {
+    string: &'static str,
+}
+
+impl std::fmt::Display for TaurusAttr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.string)
+    }
+}
+
+impl TaurusAttr {
+    pub fn match_attributes<'a>(&self, attrs: &'a [Attribute]) -> Option<&'a Attribute> {
+        attrs.iter().find(|attr| match &attr.kind {
+            AttrKind::Normal(attr_item) => {
+                let seg = &attr_item.path.segments;
+                seg.len() == 2
+                    && seg[0].ident.name.as_str() == "taurus"
+                    && seg[1].ident.name.as_str() == self.string
+            }
+            AttrKind::DocComment(_) => false,
+        })
+    }
+}
+
+const ATTR_REQUIRE_AUDIT: TaurusAttr = TaurusAttr {
+    string: "require_audit",
+};
+const ATTR_AUDITED: TaurusAttr = TaurusAttr { string: "audited" };
+const ATTR_ENTRY_POINT: TaurusAttr = TaurusAttr {
+    string: "entry_point",
+};
+
 fn extract_meta_value(attr: &Attribute) -> String {
     attr.value_str()
         .unwrap_or_else(|| {
@@ -17,6 +48,16 @@ fn extract_meta_value(attr: &Attribute) -> String {
             )
         })
         .to_string()
+}
+
+fn marking_from_attributes(attrs: &[Attribute]) -> Marking {
+    Marking {
+        require_audit: ATTR_REQUIRE_AUDIT
+            .match_attributes(attrs)
+            .map(extract_meta_value),
+        audited: ATTR_AUDITED.match_attributes(attrs).map(extract_meta_value),
+        is_entry_point: ATTR_ENTRY_POINT.match_attributes(attrs).is_some(),
+    }
 }
 
 fn record_marking(result: &mut HashMap<HirId, Marking>, hir_id: HirId, marking: Marking) {
@@ -33,70 +74,43 @@ fn record_marking(result: &mut HashMap<HirId, Marking>, hir_id: HirId, marking: 
     }
 }
 
-pub fn extract_annotated_functions(
-    taurus_annotations: &taurus_attributes::Symbols,
-    tcx: &TyCtxt<'_>,
-) -> HashMap<HirId, Marking> {
+pub fn extract_annotated_functions(tcx: &TyCtxt<'_>) -> HashMap<HirId, Marking> {
     let mut funcs: HashMap<HirId, Marking> = HashMap::new();
     let hir_map = tcx.hir();
 
     for (_, item) in &hir_map.krate().trait_items {
-        let annotation = &taurus_annotations.entry_point;
-        if let Some(_) = syntax::attr::find_by_name(&item.attrs, *annotation) {
-            panic!("#[{}] can only annotate functions", annotation);
-        }
-
-        let mut marking = Marking {
-            require_audit: None,
-            audited: None,
-            is_entry_point: false,
-        };
-        if let Some(attr) =
-            syntax::attr::find_by_name(&item.attrs, taurus_annotations.require_audit)
-        {
-            marking.require_audit = Some(extract_meta_value(attr));
-        }
-
-        if let Some(attr) = syntax::attr::find_by_name(&item.attrs, taurus_annotations.audited) {
-            marking.audited = Some(extract_meta_value(attr));
-        }
+        let marking = marking_from_attributes(&item.attrs);
 
         if marking.annotated() {
-            if let TraitItemKind::Method(..) = item.node {
+            if marking.is_entry_point {
+                panic!("#[{}] can only annotate functions", ATTR_ENTRY_POINT);
+            }
+
+            if let TraitItemKind::Method(..) = item.kind {
                 record_marking(&mut funcs, item.hir_id, marking);
             } else {
                 panic!(
                     "#[{}] and #[{}] can only annotate methods, functions, and ADTs",
-                    taurus_annotations.require_audit, taurus_annotations.audited,
+                    ATTR_REQUIRE_AUDIT, ATTR_AUDITED,
                 );
             }
         }
     }
 
     for (_, item) in &hir_map.krate().impl_items {
-        let annotation = &taurus_annotations.entry_point;
-        if let Some(_) = syntax::attr::find_by_name(&item.attrs, *annotation) {
-            panic!("#[{}] can only annotate functions", annotation);
-        }
-
-        let mut marking = Marking::default();
-        if let Some(attr) =
-            syntax::attr::find_by_name(&item.attrs, taurus_annotations.require_audit)
-        {
-            marking.require_audit = Some(extract_meta_value(attr));
-        }
-
-        if let Some(attr) = syntax::attr::find_by_name(&item.attrs, taurus_annotations.audited) {
-            marking.audited = Some(extract_meta_value(attr));
-        }
+        let marking = marking_from_attributes(&item.attrs);
 
         if marking.annotated() {
-            if let ImplItemKind::Method(..) = item.node {
+            if marking.is_entry_point {
+                panic!("#[{}] can only annotate functions", ATTR_ENTRY_POINT);
+            }
+
+            if let ImplItemKind::Method(..) = item.kind {
                 record_marking(&mut funcs, item.hir_id, marking);
             } else {
                 panic!(
                     "#[{}] and #[{}] can only annotate methods, functions, and ADTs",
-                    taurus_annotations.require_audit, taurus_annotations.audited,
+                    ATTR_REQUIRE_AUDIT, ATTR_AUDITED,
                 );
             }
         }
@@ -105,21 +119,11 @@ pub fn extract_annotated_functions(
     let mut marked_adts: HashMap<fast_reject::SimplifiedType, Marking> = HashMap::new();
 
     for (_, item) in &hir_map.krate().items {
-        let mut marking = Marking::default();
-
-        if let Some(attr) =
-            syntax::attr::find_by_name(&item.attrs, taurus_annotations.require_audit)
-        {
-            marking.require_audit = Some(extract_meta_value(attr));
-        }
-
-        if let Some(attr) = syntax::attr::find_by_name(&item.attrs, taurus_annotations.audited) {
-            marking.audited = Some(extract_meta_value(attr));
-        }
+        let marking = marking_from_attributes(&item.attrs);
 
         if marking.annotated() {
-            match &item.node {
-                ItemKind::Fn(_, _, _, body_id) => {
+            match &item.kind {
+                ItemKind::Fn(_, _, body_id) => {
                     record_marking(&mut funcs, hir_map.body_owner(*body_id), marking);
                 }
                 ItemKind::Enum(..) | ItemKind::Struct(..) | ItemKind::Union(..) => {
@@ -131,7 +135,7 @@ pub fn extract_annotated_functions(
                         } else {
                             panic!(
                                 "#[{}] can only annotate functions and methods",
-                                taurus_annotations.audited,
+                                ATTR_AUDITED,
                             );
                         }
                     } else {
@@ -160,7 +164,7 @@ pub fn extract_annotated_functions(
                 }
                 _ => panic!(
                     "#[{}] and #[{}] can only annotate functions, methods, and ADTs",
-                    taurus_annotations.require_audit, taurus_annotations.audited,
+                    ATTR_REQUIRE_AUDIT, ATTR_AUDITED,
                 ),
             }
         }
@@ -168,21 +172,19 @@ pub fn extract_annotated_functions(
 
     // Collect entry points
     for (_, item) in &hir_map.krate().items {
-        if let Some(_) = syntax::attr::find_by_name(&item.attrs, taurus_annotations.entry_point) {
-            if let ItemKind::Fn(_, _, generics, body_id) = &item.node {
+        let marking = marking_from_attributes(&item.attrs);
+
+        if marking.is_entry_point {
+            if let ItemKind::Fn(_, generics, body_id) = &item.kind {
                 if generics.params.len() == 0 {
-                    record_marking(
-                        &mut funcs,
-                        hir_map.body_owner(*body_id),
-                        Marking::entry_point(),
-                    );
+                    record_marking(&mut funcs, hir_map.body_owner(*body_id), marking);
                     continue;
                 }
             }
 
             panic!(
                 "#[{}] can only annotate functions that are non-generic",
-                taurus_annotations.entry_point,
+                ATTR_ENTRY_POINT,
             );
         }
     }
@@ -194,7 +196,7 @@ pub fn extract_annotated_functions(
 
         match node {
             Node::Item(item) => {
-                if let ItemKind::Impl(_, ImplPolarity::Positive, _, _, _, _, _) = &item.node {
+                if let ItemKind::Impl(_, ImplPolarity::Positive, _, _, _, _, _) = &item.kind {
                     let parent_did = hir_map.local_def_id(parent_hir_id);
                     let ty = tcx.type_of(parent_did);
 

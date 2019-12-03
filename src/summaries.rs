@@ -88,25 +88,7 @@ pub struct Marking {
     pub is_entry_point: bool,
 }
 
-impl Default for Marking {
-    fn default() -> Self {
-        Marking {
-            require_audit: None,
-            audited: None,
-            is_entry_point: false,
-        }
-    }
-}
-
 impl Marking {
-    pub fn entry_point() -> Self {
-        Marking {
-            require_audit: None,
-            audited: None,
-            is_entry_point: true,
-        }
-    }
-
     pub fn annotated(&self) -> bool {
         self.is_entry_point || self.require_audit.is_some() || self.audited.is_some()
     }

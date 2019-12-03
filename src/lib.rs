@@ -21,8 +21,6 @@ extern crate rusqlite;
 #[cfg(feature = "use_sled")]
 extern crate sled;
 
-extern crate taurus_attributes;
-
 pub mod analyzer;
 pub(crate) mod annotated;
 pub mod extractor;

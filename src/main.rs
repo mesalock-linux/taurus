@@ -48,7 +48,8 @@ fn main() {
         cmd_args.push(String::from("--sysroot"));
         cmd_args.push(find_sysroot());
 
-        let result = rustc_driver::report_ices_to_stderr_if_any(move || {
+        rustc_driver::install_ice_hook();
+        let result = rustc_driver::catch_fatal_errors(|| {
             let extractor = &mut extractor::TaurusExtractor::default();
             rustc_driver::run_compiler(
                 &cmd_args, extractor, None, // use default file loader
@@ -56,7 +57,12 @@ fn main() {
             )
         });
 
-        std::process::exit(result.is_err() as i32);
+        let ec = match result {
+            Ok(_) => rustc_driver::EXIT_SUCCESS,
+            Err(_) => rustc_driver::EXIT_FAILURE,
+        };
+
+        std::process::exit(ec);
     } else {
         // We are in analysis mode
         let db_path = Path::new("target/debug/deps/taurus.depstore");
@@ -64,13 +70,10 @@ fn main() {
         // println!("{}", analyzer.get_depgraph_dot());
         let report = analyzer.audit();
         for to_warn in report.unaudited {
-            println!("unaudited: {} at {}", to_warn.0, to_warn.1);
+            println!("unaudited:\n{}", to_warn);
         }
         for to_inform in report.audited {
-            println!(
-                "audited: {} by {} at {}",
-                to_inform.0, to_inform.1, to_inform.2
-            );
+            println!("audited: by {}:\n{}", to_inform.0, to_inform.1,);
         }
         println!("Audit completed");
     }

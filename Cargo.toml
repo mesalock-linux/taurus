@@ -1,9 +1,33 @@
-[workspace]
-members = [
-    "attributes",
-    "annotation",
-    "auditor",
-]
+[package]
+name = "taurus"
+version = "0.0.1"
+authors = ["Pei Wang <wangpei10@baidu.com>"]
+edition = "2018"
 
 [profile.release]
 debug = true
+
+[features]
+default = ["use_sled"]
+use_sled = ["sled"]
+use_sqlite = ["rusqlite"]
+
+[lib]
+test = false
+doctest = false
+
+[[bin]]
+name = "taurus"
+path = "src/main.rs"
+
+[dependencies]
+log = "*"
+sled = { version = "*", optional = true }
+rusqlite = { version = "*", optional = true }
+env_logger = "*"
+fs2 = "*"
+serde = "*"
+serde_derive = "*"
+bincode = "*"
+petgraph = "*"
+seahash = "*"
