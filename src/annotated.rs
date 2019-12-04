@@ -129,7 +129,8 @@ pub fn extract_annotated_functions(tcx: &TyCtxt<'_>) -> HashMap<HirId, Marking> 
                 ItemKind::Enum(..) | ItemKind::Struct(..) | ItemKind::Union(..) => {
                     let def_id = hir_map.local_def_id(item.hir_id);
                     let ty = tcx.type_of(def_id);
-                    if let Some(simplified_self_ty) = fast_reject::simplify_type(*tcx, ty, false) {
+                    // For soundness, ignore generic parameters when simplifying the annotated ADTs
+                    if let Some(simplified_self_ty) = fast_reject::simplify_type(*tcx, ty, true) {
                         if marking.require_audit.is_some() {
                             marked_adts.insert(simplified_self_ty, marking);
                         } else {
@@ -202,7 +203,7 @@ pub fn extract_annotated_functions(tcx: &TyCtxt<'_>) -> HashMap<HirId, Marking> 
 
                     // If the type cannot be simplified, it's likely a generic. We do not audit impls for pure
                     // generics since they are not specific to types we care about.
-                    if let Some(simplified_self_ty) = fast_reject::simplify_type(*tcx, ty, false) {
+                    if let Some(simplified_self_ty) = fast_reject::simplify_type(*tcx, ty, true) {
                         if let Some(marking) = marked_adts.get(&simplified_self_ty) {
                             record_marking(&mut funcs, id.hir_id, marking.clone());
                         }

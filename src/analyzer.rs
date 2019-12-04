@@ -71,7 +71,7 @@ impl AuditReport {
             writer.emit_diagnostic(&Diagnostic::new(
                 Level::Note,
                 &format!(
-                    "Audited use of insecure functions:\n   {}:\n{}",
+                    "Audited use of insecure functions:\n   {}\n{}",
                     to_note.0, to_note.1
                 ),
             ));

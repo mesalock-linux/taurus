@@ -1,6 +1,7 @@
 #![feature(rustc_private)]
 
 extern crate env_logger;
+extern crate getopts;
 extern crate rustc_driver;
 
 use std::env;
@@ -65,11 +66,27 @@ fn main() {
         std::process::exit(ec);
     } else {
         // We are in analysis mode
+        let mut opts = getopts::Options::new();
+        opts.optflag(
+            "d",
+            "dot",
+            "print the dependency graph in dot format to stdout",
+        );
+
+        let matches = match opts.parse(&cmd_args[1..]) {
+            Ok(m) => m,
+            Err(f) => panic!(f.to_string()),
+        };
+
         let db_path = Path::new("target/debug/deps/taurus.depstore");
         let analyzer = analyzer::TaurusAnalyzer::new(&db_path);
-        let report = analyzer.audit();
-        report.emit();
-    }
 
-    return;
+        if matches.opt_present("d") {
+            println!("{}", analyzer.get_depgraph_dot());
+        } else {
+            analyzer.audit().emit();
+        }
+
+        std::process::exit(rustc_driver::EXIT_SUCCESS);
+    }
 }
