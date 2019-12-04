@@ -9,6 +9,9 @@ use petgraph::stable_graph::{EdgeIndex, EdgeReference, NodeIndex, StableDiGraph}
 use petgraph::visit::EdgeRef;
 use petgraph::Direction;
 
+use rustc_errors::emitter::{ColorConfig, Emitter, EmitterWriter};
+use rustc_errors::{Diagnostic, Level};
+
 use crate::summaries::*;
 
 pub type DepGraph = StableDiGraph<String, SourceLocation>;
@@ -51,6 +54,29 @@ impl std::fmt::Display for DepPath {
 pub struct AuditReport {
     pub audited: Vec<(String, DepPath)>,
     pub unaudited: Vec<DepPath>,
+}
+
+impl AuditReport {
+    pub fn emit(&self) {
+        let mut writer = EmitterWriter::stderr(ColorConfig::Auto, None, false, false, None, false);
+
+        for to_warn in &self.unaudited {
+            writer.emit_diagnostic(&Diagnostic::new(
+                Level::Warning,
+                &format!("Unaudited use of insecure functions:\n{}", to_warn),
+            ));
+        }
+
+        for to_note in &self.audited {
+            writer.emit_diagnostic(&Diagnostic::new(
+                Level::Note,
+                &format!(
+                    "Audited use of insecure functions:\n   {}:\n{}",
+                    to_note.0, to_note.1
+                ),
+            ));
+        }
+    }
 }
 
 fn without_type_param<'a>(mono_name: &'a str) -> &'a str {
