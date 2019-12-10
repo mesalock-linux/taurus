@@ -98,14 +98,14 @@ pub fn append_mangled_type<'tcx>(str: &mut String, ty: Ty<'tcx>, tcx: &TyCtxt<'t
         RawPtr(ty_and_mut) => {
             str.push_str("pointer_");
             match ty_and_mut.mutbl {
-                rustc::hir::MutMutable => str.push_str("mut_"),
-                rustc::hir::MutImmutable => str.push_str("const_"),
+                rustc::hir::Mutability::Mutable => str.push_str("mut_"),
+                rustc::hir::Mutability::Immutable => str.push_str("const_"),
             }
             append_mangled_type(str, ty_and_mut.ty, tcx);
         }
-        Ref(_, ty, mutability) => {
+        Ref(_, ty, mutbl) => {
             str.push_str("ref_");
-            if mutability == rustc::hir::MutMutable {
+            if mutbl == rustc::hir::Mutability::Mutable {
                 str.push_str("mut_");
             }
             append_mangled_type(str, ty, tcx);
@@ -114,8 +114,7 @@ pub fn append_mangled_type<'tcx>(str: &mut String, ty: Ty<'tcx>, tcx: &TyCtxt<'t
             str.push_str(&format!("FnPtr {:?}", psig));
         }
         Tuple(types) => {
-            str.push_str("tuple_");
-            str.push_str(&format!("{}", types.len()));
+            str.push_str(&format!("tuple_{}", types.len()));
             types.iter().for_each(|t| {
                 str.push('_');
                 append_mangled_type(str, t.expect_ty(), tcx);
@@ -137,9 +136,15 @@ pub fn append_mangled_type<'tcx>(str: &mut String, ty: Ty<'tcx>, tcx: &TyCtxt<'t
         Never => {
             str.push('!');
         }
-        _ => {
+        Generator(_, _, _)
+        | Bound(_, _)
+        | Placeholder(_)
+        | Infer(_)
+        | GeneratorWitness(_) 
+        | Error
+        | UnnormalizedProjection(_) => {
             panic!("case not handled: {:?}", ty);
-        }
+        } 
     }
 }
 
